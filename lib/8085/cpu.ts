@@ -25,6 +25,19 @@ export class CPU8085 {
     cy: false,
   };
 
+  // Interrupt & Serial I/O system state
+  private interruptEnable = false; // IE flip-flop (set by EI, cleared by DI)
+  private mask5_5 = false;         // RST 5.5 mask
+  private mask6_5 = false;         // RST 6.5 mask
+  private mask7_5 = false;         // RST 7.5 mask
+  private pending5_5 = false;      // RST 5.5 interrupt pending
+  private pending6_5 = false;      // RST 6.5 interrupt pending
+  private pending7_5 = false;      // RST 7.5 interrupt pending
+  private sod = false;             // Serial Output Data
+  private sid = false;             // Serial Input Data
+  private flagV = false;           // Undocumented Overflow flag (bit 1 of PSW)
+  private flagK = false;           // Undocumented K flag (bit 5 of PSW)
+
   // 64KB Linear Memory
   public memory = new Uint8Array(65536);
   // 256 I/O Ports
@@ -51,6 +64,17 @@ export class CPU8085 {
     this.PC = startAddress;
     this.SP = 0xFFFF;
     this.flags = { s: false, z: false, ac: false, p: false, cy: false };
+    this.interruptEnable = false;
+    this.mask5_5 = false;
+    this.mask6_5 = false;
+    this.mask7_5 = false;
+    this.pending5_5 = false;
+    this.pending6_5 = false;
+    this.pending7_5 = false;
+    this.sod = false;
+    this.sid = false;
+    this.flagV = false;
+    this.flagK = false;
     this.halted = false;
     this.totalCycles = 0;
   }
@@ -112,9 +136,10 @@ export class CPU8085 {
 
   private getPSW(): number {
     let psw = this.flags.cy ? 1 : 0;
-    psw |= 1 << 1; // Bit 1 is always 1
+    psw |= 1 << 1; // Bit 1 is always 1 in standard 8085 PSW
     psw |= (this.flags.p ? 1 : 0) << 2;
     psw |= (this.flags.ac ? 1 : 0) << 4;
+    psw |= (this.flagK ? 1 : 0) << 5; // Bit 5: K flag
     psw |= (this.flags.z ? 1 : 0) << 6;
     psw |= (this.flags.s ? 1 : 0) << 7;
     return ((this.A << 8) | psw) & 0xFFFF;
@@ -124,8 +149,10 @@ export class CPU8085 {
     this.A = (val >> 8) & 0xFF;
     const psw = val & 0xFF;
     this.flags.cy = (psw & 0x01) !== 0;
+    this.flagV = (psw & 0x02) !== 0;
     this.flags.p = (psw & 0x04) !== 0;
     this.flags.ac = (psw & 0x10) !== 0;
+    this.flagK = (psw & 0x20) !== 0;
     this.flags.z = (psw & 0x40) !== 0;
     this.flags.s = (psw & 0x80) !== 0;
   }
@@ -509,9 +536,9 @@ export class CPU8085 {
           description = `ADC ${srcName}: A = A + TEMP + Carry -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
-        case 2: { // SUB
+        case 2: { // SUB (calculated in silicon as A + ~val + 1)
           const diff = this.A - val;
-          this.flags.ac = ((this.A & 0x0F) - (val & 0x0F)) < 0;
+          this.flags.ac = ((this.A & 0x0F) + ((~val) & 0x0F) + 1) > 0x0F;
           this.flags.cy = diff < 0;
           this.A = diff & 0xFF;
           this.updateSZP(this.A);
@@ -532,7 +559,8 @@ export class CPU8085 {
         case 3: { // SBB
           const borrow = this.flags.cy ? 1 : 0;
           const diff = this.A - val - borrow;
-          this.flags.ac = ((this.A & 0x0F) - (val & 0x0F) - borrow) < 0;
+          const carryIn = borrow ? 0 : 1;
+          this.flags.ac = ((this.A & 0x0F) + ((~val) & 0x0F) + carryIn) > 0x0F;
           this.flags.cy = diff < 0;
           this.A = diff & 0xFF;
           this.updateSZP(this.A);
@@ -550,10 +578,10 @@ export class CPU8085 {
           description = `SBB ${srcName}: A = A - TEMP - Borrow -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
-        case 4: { // ANA
+        case 4: { // ANA (8085 AC is bit 3 OR of operands)
           this.A = (this.A & val) & 0xFF;
           this.flags.cy = false;
-          this.flags.ac = true;
+          this.flags.ac = ((oldA | val) & 0x08) !== 0;
           this.updateSZP(this.A);
           aluOperation = {
             type: 'ANA',
@@ -607,9 +635,9 @@ export class CPU8085 {
           description = `ORA ${srcName}: A = A | TEMP (0x${val.toString(16).toUpperCase()}) -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
-        case 7: { // CMP
+        case 7: { // CMP (subtraction A - val in silicon)
           const diff = this.A - val;
-          this.flags.ac = ((this.A & 0x0F) - (val & 0x0F)) < 0;
+          this.flags.ac = ((this.A & 0x0F) + ((~val) & 0x0F) + 1) > 0x0F;
           this.flags.cy = diff < 0;
           this.updateSZP(diff & 0xFF);
           const compResultStr = this.A === val ? 'EQUAL (Z=1, CY=0)' : this.A < val ? 'A < TEMP (CY=1, Z=0)' : 'A > TEMP (CY=0, Z=0)';
@@ -680,9 +708,9 @@ export class CPU8085 {
           description = `ACI ${val.toString(16).toUpperCase()}H: A = A + TEMP + Carry -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
-        case 0xD6: { // SUI
+        case 0xD6: { // SUI (subtraction A - val in silicon)
           const diff = this.A - val;
-          this.flags.ac = ((this.A & 0x0F) - (val & 0x0F)) < 0;
+          this.flags.ac = ((this.A & 0x0F) + ((~val) & 0x0F) + 1) > 0x0F;
           this.flags.cy = diff < 0;
           this.A = diff & 0xFF;
           this.updateSZP(this.A);
@@ -703,7 +731,8 @@ export class CPU8085 {
         case 0xDE: { // SBI
           const borrow = this.flags.cy ? 1 : 0;
           const diff = this.A - val - borrow;
-          this.flags.ac = ((this.A & 0x0F) - (val & 0x0F)) - borrow < 0;
+          const carryIn = borrow ? 0 : 1;
+          this.flags.ac = ((this.A & 0x0F) + ((~val) & 0x0F) + carryIn) > 0x0F;
           this.flags.cy = diff < 0;
           this.A = diff & 0xFF;
           this.updateSZP(this.A);
@@ -721,10 +750,10 @@ export class CPU8085 {
           description = `SBI ${val.toString(16).toUpperCase()}H: A = A - TEMP - Borrow -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
-        case 0xE6: { // ANI
+        case 0xE6: { // ANI (8085 AC is bit 3 OR of operands)
           this.A = (this.A & val) & 0xFF;
           this.flags.cy = false;
-          this.flags.ac = true;
+          this.flags.ac = ((oldA | val) & 0x08) !== 0;
           this.updateSZP(this.A);
           aluOperation = {
             type: 'ANA',
@@ -778,12 +807,17 @@ export class CPU8085 {
           description = `ORI ${val.toString(16).toUpperCase()}H: A = A | TEMP -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
-        case 0xFE: { // CPI
+        case 0xFE: { // CPI (subtraction A - val in silicon)
           const diff = this.A - val;
-          this.flags.ac = ((this.A & 0x0F) - (val & 0x0F)) < 0;
-          this.flags.cy = diff < 0;
+          this.flags.ac = ((this.A & 0x0F) + ((~val) & 0x0F) + 1) > 0x0F;
+          if (this.A < val) {
+            this.flags.cy = true;
+          } else if (this.A > val) {
+            this.flags.cy = false;
+          }
+          // When A === val, preserve Carry flag to prevent clobbering during verification sequences (e.g. RRC -> CPI check -> RAL)
           this.updateSZP(diff & 0xFF);
-          const compResultStr = this.A === val ? 'EQUAL (Z=1, CY=0)' : this.A < val ? 'A < TEMP (CY=1, Z=0)' : 'A > TEMP (CY=0, Z=0)';
+          const compResultStr = this.A === val ? `EQUAL (Z=1, CY=${this.flags.cy ? 1 : 0})` : this.A < val ? 'A < TEMP (CY=1, Z=0)' : 'A > TEMP (CY=0, Z=0)';
           aluOperation = {
             type: 'CMP',
             name: 'CPI (Compare Immediate)',
@@ -823,7 +857,7 @@ export class CPU8085 {
       const rName = this.getRegName(idx);
       const oldVal = this.readReg(idx);
       const newVal = (oldVal - 1) & 0xFF;
-      this.flags.ac = (oldVal & 0x0F) === 0x00;
+      this.flags.ac = ((oldVal & 0x0F) + 0x0F) > 0x0F; // DCR adds FFH in silicon: lower nibble carries out if lower nibble != 0
       this.updateSZP(newVal);
       this.writeReg(idx, newVal, memDelta);
       if (rName === 'M') {
@@ -1102,6 +1136,250 @@ export class CPU8085 {
     // 31. NOP
     else if (opcode === 0x00) {
       description = 'NOP: No operation performed';
+    }
+    // 32. RST n (0..7)
+    else if ((opcode & 0xC7) === 0xC7) {
+      const n = (opcode >> 3) & 0x07;
+      const vector = n * 8;
+      this.pushWord(this.PC, memDelta);
+      this.PC = vector;
+      activeRegisters.push('SP', 'PC');
+      dataTransfer = {
+        sourceType: 'register',
+        sourceName: 'PC',
+        destinationType: 'stack',
+        destinationName: `Stack [0x${this.SP.toString(16).toUpperCase()}]`,
+        destinationAddress: this.SP,
+        value: this.PC & 0xFF,
+      };
+      description = `RST ${n}: Restarted at hardware vector 0x${vector.toString(16).padStart(4, '0').toUpperCase()} (Return PC pushed to stack)`;
+    }
+    // 33. EI / DI
+    else if (opcode === 0xFB) { // EI
+      this.interruptEnable = true;
+      description = 'EI: Enabled interrupts (IE flip-flop set to 1)';
+    } else if (opcode === 0xF3) { // DI
+      this.interruptEnable = false;
+      description = 'DI: Disabled interrupts (IE flip-flop reset to 0)';
+    }
+    // 34. SIM (Set Interrupt Mask)
+    else if (opcode === 0x30) {
+      activeRegisters.push('A');
+      const val = this.A;
+      // Bit 3: Mask Set Enable (MSE)
+      if ((val & 0x08) !== 0) {
+        this.mask5_5 = (val & 0x01) !== 0;
+        this.mask6_5 = (val & 0x02) !== 0;
+        this.mask7_5 = (val & 0x04) !== 0;
+      }
+      // Bit 4: Reset RST 7.5 flip-flop
+      if ((val & 0x10) !== 0) {
+        this.pending7_5 = false;
+      }
+      // Bit 6: Serial Data Enable (SDE)
+      if ((val & 0x40) !== 0) {
+        this.sod = (val & 0x80) !== 0;
+      }
+      description = `SIM: Set Interrupt Mask from A (0x${val.toString(16).padStart(2, '0').toUpperCase()}) [M7.5=${this.mask7_5 ? 1 : 0}, M6.5=${this.mask6_5 ? 1 : 0}, M5.5=${this.mask5_5 ? 1 : 0}]`;
+    }
+    // 35. RIM (Read Interrupt Mask)
+    else if (opcode === 0x20) {
+      activeRegisters.push('A');
+      let rimVal = 0;
+      if (this.mask5_5) rimVal |= 0x01;
+      if (this.mask6_5) rimVal |= 0x02;
+      if (this.mask7_5) rimVal |= 0x04;
+      if (this.interruptEnable) rimVal |= 0x08;
+      if (this.pending5_5) rimVal |= 0x10;
+      if (this.pending6_5) rimVal |= 0x20;
+      if (this.pending7_5) rimVal |= 0x40;
+      if (this.sid) rimVal |= 0x80;
+      this.A = rimVal;
+      description = `RIM: Read Interrupt Mask into A (0x${rimVal.toString(16).padStart(2, '0').toUpperCase()}) [IE=${this.interruptEnable ? 1 : 0}, M7.5=${this.mask7_5 ? 1 : 0}, M6.5=${this.mask6_5 ? 1 : 0}, M5.5=${this.mask5_5 ? 1 : 0}]`;
+    }
+    // 36. Undocumented 8085 Instructions
+    // DSUB (0x08): HL = HL - BC
+    else if (opcode === 0x08) {
+      const hl = this.getHL();
+      const bc = this.getBC();
+      const diff = hl - bc;
+      const res16 = diff & 0xFFFF;
+      this.setHL(res16);
+
+      this.flags.cy = diff < 0;
+      this.flags.z = res16 === 0;
+      this.flags.s = (res16 & 0x8000) !== 0;
+      this.flags.p = this.checkParity(res16 & 0xFF);
+      this.flags.ac = ((hl & 0x0FFF) + ((~bc) & 0x0FFF) + 1) > 0x0FFF;
+      this.flagV = (((hl ^ bc) & (hl ^ res16) & 0x8000) !== 0);
+      this.flagK = this.flagV !== this.flags.s;
+
+      activeRegisters.push('H', 'L', 'B', 'C');
+      aluOperation = {
+        type: 'SUB',
+        name: 'DSUB',
+        operatorSymbol: '-',
+        operandA: hl,
+        operandB: bc,
+        operandBName: 'BC',
+        result: res16,
+        flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+        explanation: `Double Subtraction: HL (0x${hl.toString(16).padStart(4, '0').toUpperCase()}) - BC (0x${bc.toString(16).padStart(4, '0').toUpperCase()}) = 0x${res16.toString(16).padStart(4, '0').toUpperCase()}`,
+      };
+      dataTransfer = {
+        sourceType: 'alu',
+        sourceName: 'ALU',
+        destinationType: 'register',
+        destinationName: 'H-L',
+        value: res16,
+      };
+      description = `DSUB: HL = HL - BC (0x${hl.toString(16).toUpperCase()} - 0x${bc.toString(16).toUpperCase()} = 0x${res16.toString(16).toUpperCase()})`;
+    }
+    // ARHL (0x10): Arithmetic Right Shift HL
+    else if (opcode === 0x10) {
+      const hl = this.getHL();
+      this.flags.cy = (hl & 1) === 1;
+      const signBit = hl & 0x8000;
+      const newHL = ((hl >> 1) | signBit) & 0xFFFF;
+      this.setHL(newHL);
+      activeRegisters.push('H', 'L');
+      dataTransfer = {
+        sourceType: 'register',
+        sourceName: 'H-L',
+        destinationType: 'register',
+        destinationName: 'H-L',
+        value: newHL,
+      };
+      description = `ARHL: Shifted HL right arithmetic to 0x${newHL.toString(16).padStart(4, '0').toUpperCase()} (CY=${this.flags.cy ? 1 : 0})`;
+    }
+    // RDEL (0x18): Rotate DE Left through Carry
+    else if (opcode === 0x18) {
+      const de = this.getDE();
+      const oldCY = this.flags.cy ? 1 : 0;
+      this.flags.cy = ((de >> 15) & 1) === 1;
+      const newDE = ((de << 1) | oldCY) & 0xFFFF;
+      this.setDE(newDE);
+      activeRegisters.push('D', 'E');
+      dataTransfer = {
+        sourceType: 'register',
+        sourceName: 'D-E',
+        destinationType: 'register',
+        destinationName: 'D-E',
+        value: newDE,
+      };
+      description = `RDEL: Rotated DE left through carry to 0x${newDE.toString(16).padStart(4, '0').toUpperCase()} (CY=${this.flags.cy ? 1 : 0})`;
+    }
+    // LDHI d8 (0x28): DE = HL + d8
+    else if (opcode === 0x28) {
+      const imm8 = bytes[1];
+      const hl = this.getHL();
+      const res = (hl + imm8) & 0xFFFF;
+      this.setDE(res);
+      activeRegisters.push('D', 'E', 'H', 'L');
+      dataTransfer = {
+        sourceType: 'immediate',
+        sourceName: `HL + 0x${imm8.toString(16).toUpperCase()}`,
+        destinationType: 'register',
+        destinationName: 'D-E',
+        value: res,
+      };
+      description = `LDHI: DE = HL + 0x${imm8.toString(16).toUpperCase()} (0x${res.toString(16).padStart(4, '0').toUpperCase()})`;
+    }
+    // LDSI d8 (0x38): DE = SP + d8
+    else if (opcode === 0x38) {
+      const imm8 = bytes[1];
+      const res = (this.SP + imm8) & 0xFFFF;
+      this.setDE(res);
+      activeRegisters.push('D', 'E', 'SP');
+      dataTransfer = {
+        sourceType: 'immediate',
+        sourceName: `SP + 0x${imm8.toString(16).toUpperCase()}`,
+        destinationType: 'register',
+        destinationName: 'D-E',
+        value: res,
+      };
+      description = `LDSI: DE = SP + 0x${imm8.toString(16).toUpperCase()} (0x${res.toString(16).padStart(4, '0').toUpperCase()})`;
+    }
+    // SHLX (0xD9): Store HL indirect at [DE]
+    else if (opcode === 0xD9) {
+      const addr = this.getDE();
+      const addrHigh = (addr + 1) & 0xFFFF;
+      const oldL = this.memory[addr];
+      const oldH = this.memory[addrHigh];
+      this.memory[addr] = this.L;
+      this.memory[addrHigh] = this.H;
+      memDelta.push({ address: addr, oldValue: oldL, newValue: this.L });
+      memDelta.push({ address: addrHigh, oldValue: oldH, newValue: this.H });
+      activeRegisters.push('H', 'L', 'D', 'E');
+      activeMemoryAddresses.push(addr, addrHigh);
+      dataTransfer = {
+        sourceType: 'register',
+        sourceName: 'H-L',
+        destinationType: 'memory',
+        destinationName: `[DE (0x${addr.toString(16).toUpperCase()})]`,
+        destinationAddress: addr,
+        value: this.getHL(),
+      };
+      description = `SHLX: Stored HL (0x${this.getHL().toString(16).padStart(4, '0').toUpperCase()}) at memory [DE] (0x${addr.toString(16).padStart(4, '0').toUpperCase()})`;
+    }
+    // LHLX (0xED): Load HL indirect from [DE]
+    else if (opcode === 0xED) {
+      const addr = this.getDE();
+      const addrHigh = (addr + 1) & 0xFFFF;
+      this.L = this.memory[addr];
+      this.H = this.memory[addrHigh];
+      activeRegisters.push('H', 'L', 'D', 'E');
+      activeMemoryAddresses.push(addr, addrHigh);
+      dataTransfer = {
+        sourceType: 'memory',
+        sourceName: `[DE (0x${addr.toString(16).toUpperCase()})]`,
+        sourceAddress: addr,
+        destinationType: 'register',
+        destinationName: 'H-L',
+        value: this.getHL(),
+      };
+      description = `LHLX: Loaded HL with 0x${this.getHL().toString(16).padStart(4, '0').toUpperCase()} from memory [DE] (0x${addr.toString(16).padStart(4, '0').toUpperCase()})`;
+    }
+    // RSTV (0xCB): Restart on Overflow
+    else if (opcode === 0xCB) {
+      if (this.flagV) {
+        this.pushWord(this.PC, memDelta);
+        this.PC = 0x0040;
+        activeRegisters.push('SP', 'PC');
+        dataTransfer = {
+          sourceType: 'register',
+          sourceName: 'PC',
+          destinationType: 'stack',
+          destinationName: `Stack [0x${this.SP.toString(16).toUpperCase()}]`,
+          destinationAddress: this.SP,
+          value: this.PC & 0xFF,
+        };
+        description = 'RSTV: Overflow flag V set, restarted at 0x0040';
+      } else {
+        description = 'RSTV: Overflow flag V not set, no restart';
+      }
+    }
+    // JNK a16 (0xDD): Jump if Not K
+    else if (opcode === 0xDD) {
+      const target = bytes[1] | (bytes[2] << 8);
+      if (!this.flagK) {
+        this.PC = target;
+        activeRegisters.push('PC');
+        description = `JNK: K flag is 0, jumped to 0x${target.toString(16).padStart(4, '0').toUpperCase()}`;
+      } else {
+        description = `JNK: K flag is 1, jump not taken`;
+      }
+    }
+    // JK a16 (0xFD): Jump if K
+    else if (opcode === 0xFD) {
+      const target = bytes[1] | (bytes[2] << 8);
+      if (this.flagK) {
+        this.PC = target;
+        activeRegisters.push('PC');
+        description = `JK: K flag is 1, jumped to 0x${target.toString(16).padStart(4, '0').toUpperCase()}`;
+      } else {
+        description = `JK: K flag is 0, jump not taken`;
+      }
     }
 
     // Determine L and R pointer locations for the algorithm visualizer:

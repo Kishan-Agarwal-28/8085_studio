@@ -22,6 +22,7 @@ const KNOWN_MNEMONICS = new Set([
   'IN', 'OUT', 'JMP', 'JC', 'JNC', 'JZ', 'JNZ', 'JP', 'JM', 'JPE', 'JPO',
   'CALL', 'CC', 'CNC', 'CZ', 'CNZ', 'CP', 'CM', 'CPE', 'CPO',
   'RST', 'DB', 'DW', 'DS', 'DEFB', 'DEFW', 'DEFS', 'RESERVE', 'SPACE',
+  'DSUB', 'ARHL', 'RDEL', 'LDHI', 'LDSI', 'SHLX', 'LHLX', 'RSTV', 'JNK', 'JK',
   'EQU', 'ORG', 'END',
 ]);
 
@@ -322,6 +323,9 @@ export class Assembler8085 {
       case 'LDAX': case 'STAX':
       case 'PUSH': case 'POP':
       case 'INX': case 'DCX': case 'DAD':
+      case 'DSUB': case 'ARHL': case 'RDEL': case 'SHLX': case 'LHLX': case 'RSTV':
+        return 1;
+
       case 'ADD': case 'ADC': case 'SUB': case 'SBB':
       case 'ANA': case 'XRA': case 'ORA': case 'CMP': {
         if (operands.length === 1) {
@@ -374,12 +378,14 @@ export class Assembler8085 {
       case 'ADI': case 'ACI': case 'SUI': case 'SBI':
       case 'ANI': case 'XRI': case 'ORI': case 'CPI':
       case 'IN': case 'OUT':
+      case 'LDHI': case 'LDSI':
         return 2;
 
       // 3-byte opcodes
       case 'LXI': case 'LDA': case 'STA': case 'LHLD': case 'SHLD':
       case 'JMP': case 'JC': case 'JNC': case 'JZ': case 'JNZ': case 'JP': case 'JM': case 'JPE': case 'JPO':
       case 'CALL': case 'CC': case 'CNC': case 'CZ': case 'CNZ': case 'CP': case 'CM': case 'CPE': case 'CPO':
+      case 'JNK': case 'JK':
         return 3;
 
       // Directives
@@ -734,6 +740,18 @@ export class Assembler8085 {
       case 'DI': return [0xF3];
       case 'RIM': return [0x20];
       case 'SIM': return [0x30];
+
+      // Undocumented instructions
+      case 'DSUB': return [0x08];
+      case 'ARHL': return [0x10];
+      case 'RDEL': return [0x18];
+      case 'LDHI': return [0x28, this.resolveValue(ops[0] || '', line) & 0xFF];
+      case 'LDSI': return [0x38, this.resolveValue(ops[0] || '', line) & 0xFF];
+      case 'SHLX': return [0xD9];
+      case 'LHLX': return [0xED];
+      case 'RSTV': return [0xCB];
+      case 'JNK': return this.encodeBranch(0xDD, ops[0], line);
+      case 'JK': return this.encodeBranch(0xFD, ops[0], line);
 
       // Directives
       case 'DB': case 'DEFB': {

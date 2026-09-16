@@ -19,7 +19,18 @@ import {
   Cpu,
   GripVertical,
   GripHorizontal,
+  FolderTree,
+  Save,
+  PanelLeftClose,
+  PanelLeft,
 } from 'lucide-react';
+import { FileExplorer } from '@/components/FileExplorer';
+import {
+  readFile,
+  writeFile,
+  initFileSystem,
+  splitPath,
+} from '@/lib/opfs/filesystem';
 
 const Monaco8085Editor = dynamic(
   () => import('@/components/Monaco8085Editor').then((m) => m.Monaco8085Editor),
@@ -42,6 +53,14 @@ export default function Home() {
   const [memBaseAddress, setMemBaseAddress] = useState(0x2050);
   const [userMemoryEdits, setUserMemoryEdits] = useState<Record<number, number>>({});
 
+  // File System & OPFS states
+  const [isExplorerOpen, setIsExplorerOpen] = useState(true);
+  const [explorerWidth, setExplorerWidth] = useState(230); // 160px - 420px
+  const [currentFilePath, setCurrentFilePath] = useState<string | null>('/my_programs/main.asm');
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isDraggingExplorer = useRef(false);
+
   // Resizing States with LocalStorage Persistence
   const [editorWidth, setEditorWidth] = useState<number>(45); // percentage (20% - 80%)
   const [hexHeight, setHexHeight] = useState<number>(140); // pixels (50px - 450px)
@@ -60,6 +79,7 @@ export default function Home() {
   useEffect(() => {
     WorkerClient.registerServiceWorker();
 
+    let savedFile: string | null = null;
     try {
       const savedWidth = localStorage.getItem('8085_editor_width');
       if (savedWidth) {
@@ -76,6 +96,24 @@ export default function Home() {
           setHexHeight(parsedH);
         }
       }
+
+      const savedExpOpen = localStorage.getItem('8085_explorer_open');
+      if (savedExpOpen !== null) {
+        setIsExplorerOpen(savedExpOpen === 'true');
+      }
+
+      const savedExpWidth = localStorage.getItem('8085_explorer_width');
+      if (savedExpWidth) {
+        const parsedEW = parseInt(savedExpWidth, 10);
+        if (!isNaN(parsedEW) && parsedEW >= 160 && parsedEW <= 420) {
+          setExplorerWidth(parsedEW);
+        }
+      }
+
+      savedFile = localStorage.getItem('8085_current_file');
+      if (savedFile) {
+        setCurrentFilePath(savedFile);
+      }
     } catch {
       // localStorage may be disabled in restricted environments
     }
@@ -88,6 +126,20 @@ export default function Home() {
       setSimulationResult(sim);
       setMemBaseAddress(PRESET_PROGRAMS[0].initialMemory?.[0]?.address ?? 0x2050);
     }
+
+    // Initialize OPFS and load last opened file if exists
+    initFileSystem().then(async () => {
+      const fileToLoad = savedFile || '/my_programs/main.asm';
+      try {
+        const fileContent = await readFile(fileToLoad);
+        if (fileContent) {
+          setCode(fileContent);
+          setCurrentFilePath(fileToLoad);
+        }
+      } catch {
+        // file doesn't exist yet, keep default code
+      }
+    });
   }, []);
 
   // Horizontal Drag Handler (Code Editor vs Visualizer split)
@@ -179,10 +231,155 @@ export default function Home() {
     };
   }, [isPlaying, speed, simulationResult]);
 
-  // Global keyboard shortcuts (Space, Arrows, R)
-  // FIXED: Ensure Space does NOT trigger playback when typing in Monaco Editor or any input/textarea!
+  // Explorer Drag Handler (Resizing File Explorer width)
+  const handleExplorerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isDraggingExplorer.current = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      if (!isDraggingExplorer.current || !workspaceRef.current) return;
+      const rect = workspaceRef.current.getBoundingClientRect();
+      const offsetX = moveEvent.clientX - rect.left;
+      const clamped = Math.max(160, Math.min(420, offsetX));
+      setExplorerWidth(clamped);
+    };
+
+    const onMouseUp = () => {
+      isDraggingExplorer.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      setExplorerWidth((curr) => {
+        try {
+          localStorage.setItem('8085_explorer_width', curr.toString());
+        } catch {}
+        return curr;
+      });
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  const handleToggleExplorer = () => {
+    setIsExplorerOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('8085_explorer_open', String(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  // Code change with 10s debounced auto-save
+  const handleCodeChange = (newCode: string) => {
+    setCode(newCode);
+    setHasUnsavedChanges(true);
+
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      if (currentFilePath) {
+        try {
+          await writeFile(currentFilePath, newCode);
+          setHasUnsavedChanges(false);
+        } catch (err) {
+          console.warn('[AutoSave error]:', err);
+        }
+      }
+    }, 10000); // 10s debounce auto-save
+  };
+
+  // Manual save (Ctrl+S or Save Button)
+  const handleSaveFile = useCallback(async () => {
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    const targetPath = currentFilePath || '/my_programs/main.asm';
+    try {
+      await writeFile(targetPath, code);
+      setHasUnsavedChanges(false);
+      setCurrentFilePath(targetPath);
+      try {
+        localStorage.setItem('8085_current_file', targetPath);
+      } catch {}
+      toast.add({
+        title: 'File Saved',
+        description: `Saved "${splitPath(targetPath).name}"`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      toast.add({
+        title: 'Save Failed',
+        description: err.message || 'Could not save file',
+        type: 'error',
+      });
+    }
+  }, [code, currentFilePath]);
+
+  // Open / Switch file
+  const handleSelectFile = useCallback(
+    async (path: string) => {
+      try {
+        // Auto-save previous file if modified
+        if (hasUnsavedChanges && currentFilePath) {
+          await writeFile(currentFilePath, code);
+        }
+        const content = await readFile(path);
+        setCode(content);
+        setCurrentFilePath(path);
+        setHasUnsavedChanges(false);
+        try {
+          localStorage.setItem('8085_current_file', path);
+        } catch {}
+        toast.add({
+          title: 'Opened File',
+          description: splitPath(path).name,
+          type: 'info',
+        });
+      } catch (err: any) {
+        toast.add({
+          title: 'Failed to Open File',
+          description: err.message || 'Could not read file',
+          type: 'error',
+        });
+      }
+    },
+    [code, currentFilePath, hasUnsavedChanges]
+  );
+
+  const handleFileDeleted = useCallback(
+    (deletedPath: string) => {
+      if (currentFilePath === deletedPath) {
+        setCurrentFilePath(null);
+        setHasUnsavedChanges(false);
+      }
+    },
+    [currentFilePath]
+  );
+
+  const handleFileRenamed = useCallback(
+    (oldPath: string, newPath: string) => {
+      if (currentFilePath === oldPath) {
+        setCurrentFilePath(newPath);
+        try {
+          localStorage.setItem('8085_current_file', newPath);
+        } catch {}
+      }
+    },
+    [currentFilePath]
+  );
+
+  // Global keyboard shortcuts (Ctrl+S, Space, Arrows, R)
   useEffect(() => {
     const handle = (e: KeyboardEvent) => {
+      // Save file shortcut Ctrl+S / Cmd+S (always active, even in Monaco)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSaveFile();
+        return;
+      }
+
       const target = e.target as HTMLElement | null;
       if (
         target?.tagName === 'INPUT' ||
@@ -219,6 +416,15 @@ export default function Home() {
     setCode(preset.code);
     setUserMemoryEdits({});
     setIsPlaying(false);
+
+    // Update active file reference
+    const presetPath = `/examples/${preset.id.replace(/-/g, '_')}.asm`;
+    setCurrentFilePath(presetPath);
+    setHasUnsavedChanges(false);
+    try {
+      localStorage.setItem('8085_current_file', presetPath);
+    } catch {}
+
     const comp = WorkerClient.compile(preset.code);
     setCompileResult(comp);
     if (comp.success) {
@@ -413,6 +619,20 @@ export default function Home() {
           </div>
         </div>
 
+        {/* File Explorer Toggle Button */}
+        <button
+          onClick={handleToggleExplorer}
+          className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+            isExplorerOpen
+              ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+              : 'border-border bg-card hover:bg-accent text-muted-foreground'
+          }`}
+          title="Toggle File Explorer"
+        >
+          <FolderTree className="h-3.5 w-3.5 text-amber-400" />
+          <span className="hidden sm:inline">Files</span>
+        </button>
+
         {/* Preset Dropdown */}
         <div className="hidden sm:flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Program:</span>
@@ -477,15 +697,81 @@ export default function Home() {
 
       {/* ─── Main Workspace (Resizable Split View) ─── */}
       <div ref={workspaceRef} className="flex-1 flex min-h-0 relative">
+        {/* Leftmost: File Explorer (Collapsible & Resizable) */}
+        {isExplorerOpen && (
+          <>
+            <div
+              style={{ width: `${explorerWidth}px` }}
+              className="shrink-0 h-full overflow-hidden flex flex-col"
+            >
+              <FileExplorer
+                currentFilePath={currentFilePath}
+                hasUnsavedChanges={hasUnsavedChanges}
+                onSelectFile={handleSelectFile}
+                onFileDeleted={handleFileDeleted}
+                onFileRenamed={handleFileRenamed}
+              />
+            </div>
+            {/* Explorer Resizer Handle */}
+            <div
+              onMouseDown={handleExplorerMouseDown}
+              className="w-1.5 hover:w-2 bg-border hover:bg-cyan-500/70 cursor-col-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-20"
+              title="Drag to resize File Explorer"
+            >
+              <div className="h-10 w-0.5 bg-muted-foreground/40 group-hover:bg-cyan-200 rounded-full" />
+            </div>
+          </>
+        )}
+
         {/* Left Panel: Code Editor + Hex Dump (Resizable Width) */}
         <div
           style={{ width: `${editorWidth}%` }}
-          className="min-w-[280px] max-w-[80%] flex flex-col h-full overflow-hidden"
+          className="min-w-[280px] max-w-[80%] flex flex-col h-full overflow-hidden flex-1"
         >
           {/* Editor toolbar */}
-          <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-card text-xs text-muted-foreground shrink-0">
-            <span className="font-medium text-foreground">Assembly Editor</span>
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-card text-xs text-muted-foreground shrink-0 gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <button
+                type="button"
+                onClick={handleToggleExplorer}
+                className={`p-1 rounded border transition-colors shrink-0 ${
+                  isExplorerOpen
+                    ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                    : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-400'
+                }`}
+                title={isExplorerOpen ? 'Hide File Explorer' : 'Show File Explorer'}
+              >
+                <FolderTree className="w-3.5 h-3.5" />
+              </button>
+
+              <div className="flex items-center gap-1.5 font-mono text-[11px] text-zinc-300 truncate">
+                <span className="text-zinc-500 hidden sm:inline">
+                  {currentFilePath ? splitPath(currentFilePath).parentPath + '/' : ''}
+                </span>
+                <span className="font-semibold text-foreground truncate">
+                  {currentFilePath ? splitPath(currentFilePath).name : 'Unsaved File'}
+                </span>
+                {hasUnsavedChanges && (
+                  <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse shrink-0" title="Unsaved changes" />
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSaveFile}
+                className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border transition-colors shrink-0 ${
+                  hasUnsavedChanges
+                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 hover:bg-amber-500/30'
+                    : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-zinc-200'
+                }`}
+                title="Save file (Ctrl+S)"
+              >
+                <Save className="w-3 h-3" />
+                <span>{hasUnsavedChanges ? 'Save *' : 'Saved'}</span>
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
               {compileResult && (
                 <span className={compileResult.success ? 'text-green-500 font-semibold' : 'text-destructive font-semibold'}>
                   {compileResult.success
@@ -494,7 +780,7 @@ export default function Home() {
                 </span>
               )}
               {compileResult?.hexDump && (
-                <span className="text-muted-foreground font-mono text-[11px]">
+                <span className="text-muted-foreground font-mono text-[11px] hidden md:inline">
                   ORG {compileResult.startAddress.toString(16).toUpperCase()}H
                 </span>
               )}
@@ -505,7 +791,7 @@ export default function Home() {
           <div className="flex-1 min-h-0">
             <Monaco8085Editor
               value={code}
-              onChange={setCode}
+              onChange={handleCodeChange}
               diagnostics={compileResult?.diagnostics ?? []}
               activeLine={activeLine}
             />

@@ -235,6 +235,46 @@ HLT
     `,
     initialMemory: [{ address: 0x2050, values: [0xBE] }],
     expectedA: 0xBE
+  },
+  {
+    name: 'Case 27: Undocumented instructions (DSUB, ARHL, RDEL, SHLX, LHLX)',
+    code: `
+LXI H, 1000H
+LXI B, 0001H
+DSUB
+MOV A, H
+CPI 0FH
+JNZ ERR
+MOV A, L
+CPI 0FFH
+JNZ ERR
+LXI H, 8001H
+ORA A
+ARHL
+MOV A, H
+CPI 0C0H
+JNZ ERR
+LXI D, 3200H
+LXI H, 0AABBH
+SHLX
+LXI H, 0000H
+LHLX
+MOV A, H
+CPI 0AAH
+JNZ ERR
+LXI D, 8001H
+STC
+RDEL
+MOV A, E
+CPI 03H
+JNZ ERR
+MVI A, 88H
+HLT
+ERR:
+MVI A, 0EEH
+HLT
+    `,
+    expectedA: 0x88
   }
 ];
 

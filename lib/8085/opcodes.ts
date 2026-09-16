@@ -208,6 +208,18 @@ reg(0xF3, 'DI', 1, 4, 'Disable Interrupts');
 reg(0x20, 'RIM', 1, 4, 'Read Interrupt Mask');
 reg(0x30, 'SIM', 1, 4, 'Set Interrupt Mask');
 
+// 5. Undocumented 8085 Instructions
+reg(0x08, 'DSUB', 1, 10, 'Double subtract BC from HL (HL = HL - BC)');
+reg(0x10, 'ARHL', 1, 7, 'Arithmetic right shift HL (HL >> 1, bit 15 duplicated, CY = bit 0)');
+reg(0x18, 'RDEL', 1, 10, 'Rotate DE left through Carry (16-bit rotate through CY)');
+reg(0x28, 'LDHI d8', 2, 10, 'Load DE with HL + immediate 8-bit data');
+reg(0x38, 'LDSI d8', 2, 10, 'Load DE with Stack Pointer + immediate 8-bit data');
+reg(0xD9, 'SHLX', 1, 10, 'Store HL indirect into memory address pointed by DE');
+reg(0xED, 'LHLX', 1, 10, 'Load HL indirect from memory address pointed by DE');
+reg(0xCB, 'RSTV', 1, 12, 'Restart at address 0x0040 if Overflow flag (V) is set');
+reg(0xDD, 'JNK a16', 3, 10, 'Jump to 16-bit address if K flag is not set (K = 0)');
+reg(0xFD, 'JK a16', 3, 10, 'Jump to 16-bit address if K flag is set (K = 1)');
+
 export function getOpcodeSpec(code: number): OpcodeSpec | undefined {
   return OPCODES[code];
 }
