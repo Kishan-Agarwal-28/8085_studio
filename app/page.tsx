@@ -1,952 +1,486 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import dynamic from 'next/dynamic';
-import { PRESET_PROGRAMS, PresetProgram } from '@/lib/8085/presets';
-import { CompileResult, SimulationResult, TraceStep } from '@/lib/8085/types';
-import { WorkerClient } from '@/lib/worker-client';
-import { toast } from '@/components/ui/toast';
+import { useState } from 'react';
+import Link from 'next/link';
 import {
-  Play,
-  Hammer,
-  ChevronDown,
-  RotateCcw,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsRight,
-  Pause,
-  Download,
   Cpu,
-  GripVertical,
-  GripHorizontal,
+  Play,
+  BookOpen,
+  ArrowRight,
+  Zap,
+  Code2,
+  Terminal,
+  Database,
+  Sparkles,
   FolderTree,
-  Save,
-  PanelLeftClose,
-  PanelLeft,
+  ExternalLink,
+  ChevronRight,
+  Activity,
+  Award,
+  Sliders,
 } from 'lucide-react';
-import { FileExplorer } from '@/components/FileExplorer';
-import {
-  readFile,
-  writeFile,
-  initFileSystem,
-  splitPath,
-} from '@/lib/opfs/filesystem';
+import { PRESET_PROGRAMS } from '@/lib/8085/presets';
 
-const Monaco8085Editor = dynamic(
-  () => import('@/components/Monaco8085Editor').then((m) => m.Monaco8085Editor),
-  { ssr: false, loading: () => <div className="flex-1 bg-zinc-950 animate-pulse rounded-lg" /> }
-);
-
-const CpuVisualizer = dynamic(
-  () => import('@/components/CpuVisualizer').then((m) => m.CpuVisualizer),
-  { ssr: false, loading: () => <div className="flex-1 bg-zinc-950 animate-pulse rounded-lg" /> }
-);
-
-export default function Home() {
-  const [selectedPresetId, setSelectedPresetId] = useState(PRESET_PROGRAMS[0].id);
-  const [code, setCode] = useState(PRESET_PROGRAMS[0].code);
-  const [compileResult, setCompileResult] = useState<CompileResult | null>(null);
-  const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
-  const [currentStep, setCurrentStep] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [speed, setSpeed] = useState(1);
-  const [memBaseAddress, setMemBaseAddress] = useState(0x2050);
-  const [userMemoryEdits, setUserMemoryEdits] = useState<Record<number, number>>({});
-
-  // File System & OPFS states
-  const [isExplorerOpen, setIsExplorerOpen] = useState(true);
-  const [explorerWidth, setExplorerWidth] = useState(230); // 160px - 420px
-  const [currentFilePath, setCurrentFilePath] = useState<string | null>('/my_programs/main.asm');
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isDraggingExplorer = useRef(false);
-
-  // Resizing States with LocalStorage Persistence
-  const [editorWidth, setEditorWidth] = useState<number>(45); // percentage (20% - 80%)
-  const [hexHeight, setHexHeight] = useState<number>(140); // pixels (50px - 450px)
-
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const workspaceRef = useRef<HTMLDivElement | null>(null);
-  const isDraggingHoriz = useRef(false);
-  const isDraggingVert = useRef(false);
-
-  const currentPreset = useMemo<PresetProgram>(
-    () => PRESET_PROGRAMS.find((p) => p.id === selectedPresetId) || PRESET_PROGRAMS[0],
-    [selectedPresetId]
-  );
-
-  // Register service worker and load layout preferences from localStorage
-  useEffect(() => {
-    WorkerClient.registerServiceWorker();
-
-    let savedFile: string | null = null;
-    try {
-      const savedWidth = localStorage.getItem('8085_editor_width');
-      if (savedWidth) {
-        const parsedW = parseFloat(savedWidth);
-        if (!isNaN(parsedW) && parsedW >= 20 && parsedW <= 80) {
-          setEditorWidth(parsedW);
-        }
-      }
-
-      const savedHeight = localStorage.getItem('8085_hex_height');
-      if (savedHeight) {
-        const parsedH = parseInt(savedHeight, 10);
-        if (!isNaN(parsedH) && parsedH >= 50 && parsedH <= 450) {
-          setHexHeight(parsedH);
-        }
-      }
-
-      const savedExpOpen = localStorage.getItem('8085_explorer_open');
-      if (savedExpOpen !== null) {
-        setIsExplorerOpen(savedExpOpen === 'true');
-      }
-
-      const savedExpWidth = localStorage.getItem('8085_explorer_width');
-      if (savedExpWidth) {
-        const parsedEW = parseInt(savedExpWidth, 10);
-        if (!isNaN(parsedEW) && parsedEW >= 160 && parsedEW <= 420) {
-          setExplorerWidth(parsedEW);
-        }
-      }
-
-      savedFile = localStorage.getItem('8085_current_file');
-      if (savedFile) {
-        setCurrentFilePath(savedFile);
-      }
-    } catch {
-      // localStorage may be disabled in restricted environments
-    }
-
-    // Initial compile & simulation of default preset
-    const comp = WorkerClient.compile(PRESET_PROGRAMS[0].code);
-    setCompileResult(comp);
-    if (comp.success) {
-      const sim = WorkerClient.simulate(comp, PRESET_PROGRAMS[0].initialMemory);
-      setSimulationResult(sim);
-      setMemBaseAddress(PRESET_PROGRAMS[0].initialMemory?.[0]?.address ?? 0x2050);
-    }
-
-    // Initialize OPFS and load last opened file if exists
-    initFileSystem().then(async () => {
-      const fileToLoad = savedFile || '/my_programs/main.asm';
-      try {
-        const fileContent = await readFile(fileToLoad);
-        if (fileContent) {
-          setCode(fileContent);
-          setCurrentFilePath(fileToLoad);
-        }
-      } catch {
-        // file doesn't exist yet, keep default code
-      }
-    });
-  }, []);
-
-  // Horizontal Drag Handler (Code Editor vs Visualizer split)
-  const handleHorizMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    isDraggingHoriz.current = true;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      if (!isDraggingHoriz.current || !workspaceRef.current) return;
-      const rect = workspaceRef.current.getBoundingClientRect();
-      const offsetX = moveEvent.clientX - rect.left;
-      const pct = Math.max(20, Math.min(80, (offsetX / rect.width) * 100));
-      setEditorWidth(pct);
-    };
-
-    const onMouseUp = () => {
-      isDraggingHoriz.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-      setEditorWidth((curr) => {
-        try {
-          localStorage.setItem('8085_editor_width', curr.toFixed(1));
-        } catch {}
-        return curr;
-      });
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-  };
-
-  // Vertical Drag Handler (Editor vs Hex panel split)
-  const handleVertMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    isDraggingVert.current = true;
-    document.body.style.cursor = 'row-resize';
-    document.body.style.userSelect = 'none';
-    const startY = e.clientY;
-    const startHeight = hexHeight;
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      if (!isDraggingVert.current) return;
-      const delta = startY - moveEvent.clientY; // dragging up increases hex height
-      const newH = Math.max(50, Math.min(450, startHeight + delta));
-      setHexHeight(newH);
-    };
-
-    const onMouseUp = () => {
-      isDraggingVert.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-      setHexHeight((curr) => {
-        try {
-          localStorage.setItem('8085_hex_height', curr.toString());
-        } catch {}
-        return curr;
-      });
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-  };
-
-  // Playback timer
-  useEffect(() => {
-    if (isPlaying && simulationResult) {
-      const ms = Math.max(80, Math.floor(600 / speed));
-      timerRef.current = setInterval(() => {
-        setCurrentStep((prev) => {
-          if (prev >= (simulationResult?.steps.length ?? 1) - 1) {
-            setIsPlaying(false);
-            return prev;
-          }
-          return prev + 1;
-        });
-      }, ms);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isPlaying, speed, simulationResult]);
-
-  // Explorer Drag Handler (Resizing File Explorer width)
-  const handleExplorerMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    isDraggingExplorer.current = true;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      if (!isDraggingExplorer.current || !workspaceRef.current) return;
-      const rect = workspaceRef.current.getBoundingClientRect();
-      const offsetX = moveEvent.clientX - rect.left;
-      const clamped = Math.max(160, Math.min(420, offsetX));
-      setExplorerWidth(clamped);
-    };
-
-    const onMouseUp = () => {
-      isDraggingExplorer.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-      setExplorerWidth((curr) => {
-        try {
-          localStorage.setItem('8085_explorer_width', curr.toString());
-        } catch {}
-        return curr;
-      });
-    };
-
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-  };
-
-  const handleToggleExplorer = () => {
-    setIsExplorerOpen((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem('8085_explorer_open', String(next));
-      } catch {}
-      return next;
-    });
-  };
-
-  // Code change with 10s debounced auto-save
-  const handleCodeChange = (newCode: string) => {
-    setCode(newCode);
-    setHasUnsavedChanges(true);
-
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    autoSaveTimerRef.current = setTimeout(async () => {
-      if (currentFilePath) {
-        try {
-          await writeFile(currentFilePath, newCode);
-          setHasUnsavedChanges(false);
-        } catch (err) {
-          console.warn('[AutoSave error]:', err);
-        }
-      }
-    }, 10000); // 10s debounce auto-save
-  };
-
-  // Manual save (Ctrl+S or Save Button)
-  const handleSaveFile = useCallback(async () => {
-    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
-    const targetPath = currentFilePath || '/my_programs/main.asm';
-    try {
-      await writeFile(targetPath, code);
-      setHasUnsavedChanges(false);
-      setCurrentFilePath(targetPath);
-      try {
-        localStorage.setItem('8085_current_file', targetPath);
-      } catch {}
-      toast.add({
-        title: 'File Saved',
-        description: `Saved "${splitPath(targetPath).name}"`,
-        type: 'success',
-      });
-    } catch (err: any) {
-      toast.add({
-        title: 'Save Failed',
-        description: err.message || 'Could not save file',
-        type: 'error',
-      });
-    }
-  }, [code, currentFilePath]);
-
-  // Open / Switch file
-  const handleSelectFile = useCallback(
-    async (path: string) => {
-      try {
-        // Auto-save previous file if modified
-        if (hasUnsavedChanges && currentFilePath) {
-          await writeFile(currentFilePath, code);
-        }
-        const content = await readFile(path);
-        setCode(content);
-        setCurrentFilePath(path);
-        setHasUnsavedChanges(false);
-        try {
-          localStorage.setItem('8085_current_file', path);
-        } catch {}
-        toast.add({
-          title: 'Opened File',
-          description: splitPath(path).name,
-          type: 'info',
-        });
-      } catch (err: any) {
-        toast.add({
-          title: 'Failed to Open File',
-          description: err.message || 'Could not read file',
-          type: 'error',
-        });
-      }
-    },
-    [code, currentFilePath, hasUnsavedChanges]
-  );
-
-  const handleFileDeleted = useCallback(
-    (deletedPath: string) => {
-      if (currentFilePath === deletedPath) {
-        setCurrentFilePath(null);
-        setHasUnsavedChanges(false);
-      }
-    },
-    [currentFilePath]
-  );
-
-  const handleFileRenamed = useCallback(
-    (oldPath: string, newPath: string) => {
-      if (currentFilePath === oldPath) {
-        setCurrentFilePath(newPath);
-        try {
-          localStorage.setItem('8085_current_file', newPath);
-        } catch {}
-      }
-    },
-    [currentFilePath]
-  );
-
-  // Global keyboard shortcuts (Ctrl+S, Space, Arrows, R)
-  useEffect(() => {
-    const handle = (e: KeyboardEvent) => {
-      // Save file shortcut Ctrl+S / Cmd+S (always active, even in Monaco)
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        handleSaveFile();
-        return;
-      }
-
-      const target = e.target as HTMLElement | null;
-      if (
-        target?.tagName === 'INPUT' ||
-        target?.tagName === 'TEXTAREA' ||
-        target?.isContentEditable ||
-        target?.closest?.('.monaco-editor') ||
-        document.activeElement?.closest?.('.monaco-editor')
-      ) {
-        return;
-      }
-
-      if (e.code === 'Space') {
-        e.preventDefault();
-        handleTogglePlay();
-      } else if (e.code === 'ArrowRight') {
-        e.preventDefault();
-        handleNextStep();
-      } else if (e.code === 'ArrowLeft') {
-        e.preventDefault();
-        handlePrevStep();
-      } else if (e.key.toLowerCase() === 'r') {
-        e.preventDefault();
-        handleReset();
-      }
-    };
-    window.addEventListener('keydown', handle);
-    return () => window.removeEventListener('keydown', handle);
-  });
-
-  const handleSelectPreset = (id: string) => {
-    const preset = PRESET_PROGRAMS.find((p) => p.id === id);
-    if (!preset) return;
-    setSelectedPresetId(id);
-    setCode(preset.code);
-    setUserMemoryEdits({});
-    setIsPlaying(false);
-
-    // Update active file reference
-    const presetPath = `/examples/${preset.id.replace(/-/g, '_')}.asm`;
-    setCurrentFilePath(presetPath);
-    setHasUnsavedChanges(false);
-    try {
-      localStorage.setItem('8085_current_file', presetPath);
-    } catch {}
-
-    const comp = WorkerClient.compile(preset.code);
-    setCompileResult(comp);
-    if (comp.success) {
-      const sim = WorkerClient.simulate(comp, preset.initialMemory);
-      setSimulationResult(sim);
-      setCurrentStep(0);
-      setMemBaseAddress(preset.initialMemory?.[0]?.address ?? 0x2050);
-    } else {
-      setSimulationResult(null);
-      setCurrentStep(0);
-      setMemBaseAddress(preset.initialMemory?.[0]?.address ?? 0x2050);
-    }
-    toast.add({ title: `Loaded "${preset.name}"`, description: preset.description, type: 'info' });
-  };
-
-  // STEP 1: Compile
-  const handleCompile = useCallback(() => {
-    setIsPlaying(false);
-    const result = WorkerClient.compile(code);
-    setCompileResult(result);
-    setSimulationResult(null);
-    setCurrentStep(0);
-
-    if (result.success) {
-      toast.add({
-        title: 'Compilation Successful',
-        description: `${result.machineCode.length} bytes generated. Click "Run" to simulate.`,
-        type: 'success',
-      });
-    } else {
-      const errCount = result.diagnostics.filter((d) => d.severity === 'error').length;
-      toast.add({
-        title: 'Compilation Failed',
-        description: `${errCount} error${errCount !== 1 ? 's' : ''} found. Check the editor for details.`,
-        type: 'error',
-      });
-    }
-  }, [code]);
-
-  // STEP 2: Run
-  const handleRun = useCallback(() => {
-    setIsPlaying(false);
-    const comp = WorkerClient.compile(code);
-    setCompileResult(comp);
-
-    if (!comp.success) {
-      const errCount = comp.diagnostics.filter((d) => d.severity === 'error').length;
-      toast.add({
-        title: 'Cannot Run — Compilation Failed',
-        description: `Fix ${errCount} error${errCount !== 1 ? 's' : ''} before running.`,
-        type: 'error',
-      });
-      return;
-    }
-
-    // Merge preset initialMemory and user's manual memory modifications
-    const memMap = new Map<number, number>();
-    if (currentPreset.initialMemory) {
-      for (const block of currentPreset.initialMemory) {
-        for (let i = 0; i < block.values.length; i++) {
-          memMap.set((block.address + i) & 0xFFFF, block.values[i] & 0xFF);
-        }
-      }
-    }
-    // Overlay user memory edits
-    for (const [addrStr, byteVal] of Object.entries(userMemoryEdits)) {
-      memMap.set(parseInt(addrStr, 10) & 0xFFFF, byteVal & 0xFF);
-    }
-
-    const initialMemBlocks: { address: number; values: number[] }[] = [];
-    memMap.forEach((byteVal, addr) => {
-      initialMemBlocks.push({ address: addr, values: [byteVal] });
-    });
-
-    const sim = WorkerClient.simulate(comp, initialMemBlocks);
-    setSimulationResult(sim);
-    setCurrentStep(0);
-
-    // Auto-detect optimal memory base address
-    let targetMem = 0x2050;
-    const firstMemAccessStep = sim.steps.find((s) => s.activeMemoryAddresses && s.activeMemoryAddresses.length > 0);
-    if (firstMemAccessStep && firstMemAccessStep.activeMemoryAddresses.length > 0) {
-      targetMem = firstMemAccessStep.activeMemoryAddresses[0];
-    } else {
-      const editedAddrs = Object.keys(userMemoryEdits);
-      if (editedAddrs.length > 0) {
-        targetMem = parseInt(editedAddrs[0], 10);
-      } else if (currentPreset.initialMemory?.[0]?.address !== undefined) {
-        targetMem = currentPreset.initialMemory[0].address;
-      }
-    }
-    setMemBaseAddress(targetMem & ~0x0F);
-
-    if (sim.success && sim.steps.length > 0) {
-      toast.add({
-        title: 'Simulation Ready',
-        description: `${sim.steps.length} steps recorded (${sim.totalCycles} T-states). Press Space or Play to start.`,
-        type: 'success',
-      });
-    } else {
-      toast.add({
-        title: 'Simulation Warning',
-        description: sim.error || 'No instructions were executed. Check your code.',
-        type: 'warning',
-      });
-    }
-  }, [code, currentPreset.initialMemory, userMemoryEdits]);
-
-  // Download Machine Code Hex Dump as .txt file (Replaced WASM download)
-  const handleDownloadHex = useCallback(() => {
-    if (!compileResult?.hexDump) {
-      toast.add({
-        title: 'No hex dump available',
-        description: 'Please compile or run the program first to generate the hex dump.',
-        type: 'warning',
-      });
-      return;
-    }
-
-    const blob = new Blob([compileResult.hexDump], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const sanitizedName = currentPreset.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    a.download = `8085_${sanitizedName}_hex.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.add({
-      title: 'Downloaded Hex Dump',
-      description: `Saved as 8085_${sanitizedName}_hex.txt`,
-      type: 'success',
-    });
-  }, [compileResult, currentPreset.name]);
-
-  // Handle direct modification of a memory byte by the user
-  const handleMemoryByteChange = useCallback((address: number, newValue: number) => {
-    const addr = address & 0xFFFF;
-    const val = newValue & 0xFF;
-
-    setUserMemoryEdits((prev) => ({
-      ...prev,
-      [addr]: val,
-    }));
-
-    setSimulationResult((prev) => {
-      if (!prev) return null;
-      const updatedMem = new Uint8Array(prev.memory);
-      updatedMem[addr] = val;
-      return {
-        ...prev,
-        memory: updatedMem,
-      };
-    });
-
-    toast.add({
-      title: 'Memory Modified',
-      description: `Address 0x${addr.toString(16).toUpperCase().padStart(4, '0')}H updated to 0x${val.toString(16).toUpperCase().padStart(2, '0')}H (${val})`,
-      type: 'info',
-    });
-  }, []);
-
-  // Playback helpers
-  const steps = simulationResult?.steps ?? [];
-  const totalSteps = steps.length;
-  const activeStep: TraceStep | undefined = totalSteps > 0 && currentStep < totalSteps ? steps[currentStep] : undefined;
-  const activeLine = activeStep?.line;
-
-  const handleTogglePlay = () => {
-    if (totalSteps === 0) return;
-    if (currentStep >= totalSteps - 1) {
-      setCurrentStep(0);
-      setIsPlaying(true);
-    } else {
-      setIsPlaying((p) => !p);
-    }
-  };
-  const handleNextStep = () => { setIsPlaying(false); setCurrentStep((s) => Math.min(s + 1, totalSteps - 1)); };
-  const handlePrevStep = () => { setIsPlaying(false); setCurrentStep((s) => Math.max(s - 1, 0)); };
-  const handleReset = () => { setIsPlaying(false); setCurrentStep(0); };
+export default function LandingPage() {
+  const [activeCodeTab, setActiveCodeTab] = useState<'sample' | 'ghost'>('sample');
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-background text-foreground select-none">
-      {/* ─── Header ─── */}
-      <header className="flex items-center justify-between gap-3 border-b border-border px-4 py-2 shrink-0">
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-primary text-primary-foreground">
-            <Cpu className="h-4 w-4" />
-          </div>
-          <div className="leading-tight">
-            <h1 className="text-sm font-semibold">8085 Simulator</h1>
-            <p className="text-[11px] text-muted-foreground">Assemble · Simulate · Step-by-Step Architecture</p>
-          </div>
-        </div>
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 selection:bg-emerald-500/30 selection:text-emerald-200 flex flex-col">
+      {/* ─── Top Navbar ─── */}
+      <header className="sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+          <Link href="/" className="flex items-center gap-3 group">
+            <div className="h-9 w-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition-transform shadow-sm shadow-emerald-500/10">
+              <Cpu className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-sm tracking-tight text-zinc-100">8085 Studio</span>
+                <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/50">v1.0</span>
+              </div>
+              <p className="text-[11px] text-zinc-400">Next-Gen 8085 Microprocessor IDE</p>
+            </div>
+          </Link>
 
-        {/* File Explorer Toggle Button */}
-        <button
-          onClick={handleToggleExplorer}
-          className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
-            isExplorerOpen
-              ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-              : 'border-border bg-card hover:bg-accent text-muted-foreground'
-          }`}
-          title="Toggle File Explorer"
-        >
-          <FolderTree className="h-3.5 w-3.5 text-amber-400" />
-          <span className="hidden sm:inline">Files</span>
-        </button>
+          <nav className="hidden md:flex items-center gap-6 text-xs font-medium text-zinc-400">
+            <a href="#features" className="hover:text-zinc-100 transition-colors">Features</a>
+            <a href="#benchmarks" className="hover:text-zinc-100 transition-colors">Silicon Benchmarks</a>
+            <a href="#presets" className="hover:text-zinc-100 transition-colors">Presets</a>
+            <Link href="/instructions" className="hover:text-zinc-100 transition-colors">Manual & ISA</Link>
+          </nav>
 
-        {/* Preset Dropdown */}
-        <div className="hidden sm:flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">Program:</span>
-          <div className="relative">
-            <select
-              value={selectedPresetId}
-              onChange={(e) => handleSelectPreset(e.target.value)}
-              className="appearance-none rounded-md border border-border bg-card pl-3 pr-8 py-1.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-ring"
+          <div className="flex items-center gap-3">
+            <Link
+              href="/instructions"
+              className="text-xs font-medium text-zinc-400 hover:text-zinc-200 px-3 py-1.5 rounded-md hover:bg-zinc-900 transition-colors hidden sm:inline-flex items-center gap-1.5"
             >
-              {PRESET_PROGRAMS.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          </div>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleCompile}
-            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors active:scale-[0.97]"
-          >
-            <Hammer className="h-3.5 w-3.5" />
-            Compile
-          </button>
-          <button
-            onClick={handleRun}
-            className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3.5 py-1.5 text-xs font-semibold hover:bg-primary/90 transition-colors active:scale-[0.97]"
-          >
-            <Play className="h-3.5 w-3.5 fill-current" />
-            Run
-          </button>
-          {compileResult?.hexDump && (
-            <button
-              onClick={handleDownloadHex}
-              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
-              title="Download Hex Dump as a text file"
+              <BookOpen className="h-3.5 w-3.5" />
+              Guide
+            </Link>
+            <Link
+              href="/simulator"
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold px-4 py-2 text-xs shadow-md shadow-emerald-500/20 transition-all hover:scale-105 active:scale-95"
             >
-              <Download className="h-3.5 w-3.5" />
-              Hex (.txt)
-            </button>
-          )}
+              <Play className="h-3.5 w-3.5 fill-current" />
+              Launch Simulator
+            </Link>
+          </div>
         </div>
       </header>
 
-      {/* ─── Diagnostics strip ─── */}
-      {compileResult && compileResult.diagnostics.length > 0 && (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 text-xs text-destructive shrink-0 overflow-x-auto scrollbar-thin scrollbar-thumb-destructive/50 scrollbar-track-transparent">
-          <div className="flex items-center gap-4">
-            {compileResult.diagnostics.slice(0, 5).map((d, i) => (
-              <span key={i} className="whitespace-nowrap">
-                <span className="font-semibold">Ln {d.line}:</span> {d.message}
-              </span>
-            ))}
-            {compileResult.diagnostics.length > 5 && (
-              <span className="text-destructive/70">+{compileResult.diagnostics.length - 5} more</span>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ─── Main Workspace (Resizable Split View) ─── */}
-      <div ref={workspaceRef} className="flex-1 flex min-h-0 relative">
-        {/* Leftmost: File Explorer (Collapsible & Resizable) */}
-        {isExplorerOpen && (
-          <>
-            <div
-              style={{ width: `${explorerWidth}px` }}
-              className="shrink-0 h-full overflow-hidden flex flex-col"
-            >
-              <FileExplorer
-                currentFilePath={currentFilePath}
-                hasUnsavedChanges={hasUnsavedChanges}
-                onSelectFile={handleSelectFile}
-                onFileDeleted={handleFileDeleted}
-                onFileRenamed={handleFileRenamed}
-              />
-            </div>
-            {/* Explorer Resizer Handle */}
-            <div
-              onMouseDown={handleExplorerMouseDown}
-              className="w-1.5 hover:w-2 bg-border hover:bg-cyan-500/70 cursor-col-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-20"
-              title="Drag to resize File Explorer"
-            >
-              <div className="h-10 w-0.5 bg-muted-foreground/40 group-hover:bg-cyan-200 rounded-full" />
-            </div>
-          </>
-        )}
-
-        {/* Left Panel: Code Editor + Hex Dump (Resizable Width) */}
-        <div
-          style={{ width: `${editorWidth}%` }}
-          className="min-w-[280px] max-w-[80%] flex flex-col h-full overflow-hidden flex-1"
-        >
-          {/* Editor toolbar */}
-          <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-card text-xs text-muted-foreground shrink-0 gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <button
-                type="button"
-                onClick={handleToggleExplorer}
-                className={`p-1 rounded border transition-colors shrink-0 ${
-                  isExplorerOpen
-                    ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                    : 'bg-zinc-900 border-zinc-800 hover:bg-zinc-800 text-zinc-400'
-                }`}
-                title={isExplorerOpen ? 'Hide File Explorer' : 'Show File Explorer'}
-              >
-                <FolderTree className="w-3.5 h-3.5" />
-              </button>
-
-              <div className="flex items-center gap-1.5 font-mono text-[11px] text-zinc-300 truncate">
-                <span className="text-zinc-500 hidden sm:inline">
-                  {currentFilePath ? splitPath(currentFilePath).parentPath + '/' : ''}
-                </span>
-                <span className="font-semibold text-foreground truncate">
-                  {currentFilePath ? splitPath(currentFilePath).name : 'Unsaved File'}
-                </span>
-                {hasUnsavedChanges && (
-                  <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse shrink-0" title="Unsaved changes" />
-                )}
+      {/* ─── Hero Section ─── */}
+      <section className="relative overflow-hidden pt-12 pb-20 border-b border-zinc-900 bg-linear-to-b from-zinc-900/30 via-zinc-950 to-zinc-950">
+        <div className="absolute inset-0 bg-[linear-gradient(to_right,#80808008_1px,transparent_1px),linear-gradient(to_bottom,#80808008_1px,transparent_1px)] bg-size-[24px_24px] pointer-events-none" />
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+            {/* Left Column: Copy & Actions */}
+            <div className="lg:col-span-7 space-y-6 text-center lg:text-left">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                <Sparkles className="h-3.5 w-3.5" />
+                Cycle-Accurate Microprocessor Simulation & Bus Visualizer
               </div>
 
-              <button
-                type="button"
-                onClick={handleSaveFile}
-                className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium border transition-colors shrink-0 ${
-                  hasUnsavedChanges
-                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 hover:bg-amber-500/30'
-                    : 'bg-zinc-900/60 text-zinc-400 border-zinc-800 hover:text-zinc-200'
-                }`}
-                title="Save file (Ctrl+S)"
-              >
-                <Save className="w-3 h-3" />
-                <span>{hasUnsavedChanges ? 'Save *' : 'Saved'}</span>
-              </button>
-            </div>
+              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-zinc-100 leading-tight">
+                Master the Intel 8085 in Real Silicon Fidelity
+              </h1>
 
-            <div className="flex items-center gap-3 shrink-0">
-              {compileResult && (
-                <span className={compileResult.success ? 'text-green-500 font-semibold' : 'text-destructive font-semibold'}>
-                  {compileResult.success
-                    ? `✓ ${compileResult.machineCode.length}B`
-                    : `✗ ${compileResult.diagnostics.filter((d) => d.severity === 'error').length} errors`}
-                </span>
-              )}
-              {compileResult?.hexDump && (
-                <span className="text-muted-foreground font-mono text-[11px] hidden md:inline">
-                  ORG {compileResult.startAddress.toString(16).toUpperCase()}H
-                </span>
-              )}
-            </div>
-          </div>
+              <p className="text-base sm:text-lg text-zinc-400 max-w-2xl leading-relaxed">
+                An advanced two-pass assembler, cycle-accurate virtual CPU, and live data-bus visualizer designed for students, computer scientists, and retro-computing purists. Complete with all 10 undocumented ghost opcodes and authentic ALU physics.
+              </p>
 
-          {/* Monaco Editor Container */}
-          <div className="flex-1 min-h-0">
-            <Monaco8085Editor
-              value={code}
-              onChange={handleCodeChange}
-              diagnostics={compileResult?.diagnostics ?? []}
-              activeLine={activeLine}
-            />
-          </div>
-
-          {/* Vertical Resizer Handle between Editor and Hex Dump */}
-          {compileResult?.hexDump && (
-            <div
-              onMouseDown={handleVertMouseDown}
-              className="h-1.5 hover:h-2 bg-border hover:bg-cyan-500/70 cursor-row-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-10"
-              title="Drag up/down to resize Hex Dump"
-            >
-              <div className="w-10 h-0.5 bg-muted-foreground/40 group-hover:bg-cyan-200 rounded-full" />
-            </div>
-          )}
-
-          {/* Hex Dump Panel (Resizable Height) */}
-          {compileResult?.hexDump && (
-            <div
-              style={{ height: `${hexHeight}px` }}
-              className="border-t border-border bg-card shrink-0 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-zinc-950/60 flex flex-col"
-            >
-              <div className="flex items-center justify-between px-3 py-1 bg-zinc-950/60 border-b border-border text-[11px] font-mono text-zinc-400">
-                <span className="font-semibold text-zinc-300">Generated Hex Dump</span>
-                <span className="text-zinc-500 text-[10px]">Drag bar above to resize</span>
-              </div>
-              <pre className="px-3 py-2 text-[11px] font-mono text-muted-foreground leading-relaxed select-text flex-1">
-                {compileResult.hexDump}
-              </pre>
-            </div>
-          )}
-        </div>
-
-        {/* Horizontal Resizer Handle between Left and Right Panels */}
-        <div
-          onMouseDown={handleHorizMouseDown}
-          className="w-1.5 hover:w-2 bg-border hover:bg-cyan-500/70 cursor-col-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-20"
-          title="Drag left/right to resize Editor & Visualizer"
-        >
-          <div className="h-10 w-0.5 bg-muted-foreground/40 group-hover:bg-cyan-200 rounded-full" />
-        </div>
-
-        {/* Right Panel: Visualization & Playback Controls */}
-        <div
-          style={{ width: `${100 - editorWidth}%` }}
-          className="min-w-[320px] flex flex-col h-full overflow-hidden"
-        >
-          {/* Playback Control Bar */}
-          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
-            <button
-              onClick={handleReset}
-              disabled={totalSteps === 0}
-              className="p-1.5 rounded-md hover:bg-accent disabled:opacity-40 transition-colors"
-              title="Reset to start (R)"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={handlePrevStep}
-              disabled={totalSteps === 0 || currentStep === 0}
-              className="p-1.5 rounded-md hover:bg-accent disabled:opacity-40 transition-colors"
-              title="Previous Step (←)"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <button
-              onClick={handleTogglePlay}
-              disabled={totalSteps === 0}
-              className="p-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors"
-              title="Play / Pause (Space)"
-            >
-              {isPlaying ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
-            </button>
-            <button
-              onClick={handleNextStep}
-              disabled={totalSteps === 0 || currentStep >= totalSteps - 1}
-              className="p-1.5 rounded-md hover:bg-accent disabled:opacity-40 transition-colors"
-              title="Next Step (→)"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => {
-                setIsPlaying(false);
-                setCurrentStep(Math.max(0, totalSteps - 1));
-              }}
-              disabled={totalSteps === 0}
-              className="p-1.5 rounded-md hover:bg-accent disabled:opacity-40 transition-colors"
-              title="Jump to End"
-            >
-              <ChevronsRight className="h-4 w-4" />
-            </button>
-
-            {/* Step Progress Slider */}
-            <input
-              type="range"
-              min={0}
-              max={Math.max(0, totalSteps - 1)}
-              value={currentStep}
-              disabled={totalSteps === 0}
-              onChange={(e) => {
-                setIsPlaying(false);
-                setCurrentStep(parseInt(e.target.value, 10));
-              }}
-              className="flex-1 h-1.5 accent-primary bg-muted rounded-full cursor-pointer disabled:opacity-40 mx-1"
-            />
-
-            {/* Step Counter Display */}
-            <span className="text-xs font-mono text-muted-foreground min-w-[4.5rem] text-right tabular-nums">
-              {totalSteps > 0 ? `${currentStep + 1} / ${totalSteps}` : '— / —'}
-            </span>
-
-            {/* Speed Multiplier Pill Buttons */}
-            <div className="flex items-center border border-border rounded-md overflow-hidden ml-1">
-              {[0.5, 1, 2, 4].map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setSpeed(s)}
-                  className={`px-2 py-0.5 text-[11px] font-mono transition-colors ${
-                    speed === s
-                      ? 'bg-primary text-primary-foreground font-bold'
-                      : 'hover:bg-accent text-muted-foreground'
-                  }`}
+              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 pt-2">
+                <Link
+                  href="/simulator"
+                  className="inline-flex items-center gap-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold px-6 py-3.5 text-sm shadow-lg shadow-emerald-500/25 transition-all hover:scale-105 active:scale-95"
                 >
-                  {s}x
-                </button>
-              ))}
-            </div>
-          </div>
+                  <Play className="h-4 w-4 fill-current" />
+                  Launch Free Simulator
+                  <ArrowRight className="h-4 w-4 ml-1" />
+                </Link>
+                <Link
+                  href="/instructions"
+                  className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-200 font-semibold px-5 py-3.5 text-sm transition-colors"
+                >
+                  <BookOpen className="h-4 w-4 text-cyan-400" />
+                  Usage Guide & ISA Reference
+                </Link>
+              </div>
 
-          {/* CPU & Memory Architecture Visualizer */}
-          <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-zinc-950/60 hover:scrollbar-thumb-zinc-500 p-3">
-            {simulationResult ? (
-              <CpuVisualizer
-                steps={steps}
-                memory={simulationResult.memory}
-                currentStep={currentStep}
-                memBaseAddress={memBaseAddress}
-                onMemBaseChange={setMemBaseAddress}
-                onMemoryByteChange={handleMemoryByteChange}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4">
-                <Cpu className="h-16 w-16 opacity-20" />
-                <div className="text-center">
-                  <p className="text-sm font-medium">No simulation loaded</p>
-                  <p className="text-xs mt-1">
-                    Write or select a program, then click <strong>Compile</strong> → <strong>Run</strong> to see the CPU in action.
-                  </p>
+              {/* Key Metrics / Badges */}
+              <div className="grid grid-cols-3 gap-4 pt-6 max-w-lg mx-auto lg:mx-0 border-t border-zinc-900">
+                <div>
+                  <div className="text-xl font-bold font-mono text-emerald-400">246 + 10</div>
+                  <div className="text-[11px] text-zinc-500">Standard + Ghost Opcodes</div>
+                </div>
+                <div>
+                  <div className="text-xl font-bold font-mono text-cyan-400">100%</div>
+                  <div className="text-[11px] text-zinc-500">Silicon Anomaly Fidelity</div>
+                </div>
+                <div>
+                  <div className="text-xl font-bold font-mono text-amber-400">64 KB</div>
+                  <div className="text-[11px] text-zinc-500">Full Linear Address Space</div>
                 </div>
               </div>
-            )}
+            </div>
+
+            {/* Right Column: Live Interactive Architectural Visualizer Preview */}
+            <div className="lg:col-span-5">
+              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/90 shadow-2xl p-5 space-y-4 relative overflow-hidden backdrop-blur-sm">
+                <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 rounded-full bg-rose-500/80" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-amber-500/80" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-emerald-500/80" />
+                    <span className="text-xs font-mono text-zinc-400 ml-2">8085-cpu-core</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] font-mono text-emerald-400 bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-800/40">
+                    <Activity className="h-3 w-3 animate-pulse" />
+                    CYCLE: 48 T-STATES
+                  </div>
+                </div>
+
+                {/* Tabs */}
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => setActiveCodeTab('sample')}
+                    className={`text-xs px-2.5 py-1 rounded-md font-mono transition-colors ${
+                      activeCodeTab === 'sample'
+                        ? 'bg-zinc-800 text-emerald-400 border border-zinc-700'
+                        : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    bubble_sort.asm
+                  </button>
+                  <button
+                    onClick={() => setActiveCodeTab('ghost')}
+                    className={`text-xs px-2.5 py-1 rounded-md font-mono transition-colors ${
+                      activeCodeTab === 'ghost'
+                        ? 'bg-zinc-800 text-purple-400 border border-zinc-700'
+                        : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    undocumented_ghost.asm
+                  </button>
+                </div>
+
+                {/* Code Window */}
+                <pre className="p-3.5 rounded-lg bg-zinc-950/90 font-mono text-xs text-zinc-300 overflow-x-auto border border-zinc-850 h-36 leading-relaxed">
+                  {activeCodeTab === 'sample' ? (
+                    <>
+                      <span className="text-zinc-500">; Two-Pointer Array Traversal</span>{'\n'}
+                      <span className="text-emerald-400">LXI H, 2050H</span>  <span className="text-zinc-500">; Pointer L [HL]</span>{'\n'}
+                      <span className="text-cyan-400">LXI D, 2051H</span>  <span className="text-zinc-500">; Pointer R [DE]</span>{'\n'}
+                      <span className="text-amber-400">MOV A, M</span>      <span className="text-zinc-500">; Load left element</span>{'\n'}
+                      <span className="text-purple-400">LDAX D</span>        <span className="text-zinc-500">; Load right element</span>{'\n'}
+                      <span className="text-emerald-400">CMP M</span>         <span className="text-zinc-500">; Compare values</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-zinc-500">; Undocumented 8085 Ghost Opcodes</span>{'\n'}
+                      <span className="text-emerald-400">LXI H, 1000H</span>{'\n'}
+                      <span className="text-cyan-400">LXI B, 0001H</span>{'\n'}
+                      <span className="text-purple-400 font-bold">DSUB</span>          <span className="text-zinc-500">; HL = HL - BC (0x08)</span>{'\n'}
+                      <span className="text-purple-400 font-bold">ARHL</span>          <span className="text-zinc-500">; Shift HL right arith (0x10)</span>{'\n'}
+                      <span className="text-purple-400 font-bold">SHLX</span>          <span className="text-zinc-500">; Store HL at [DE] (0xD9)</span>
+                    </>
+                  )}
+                </pre>
+
+                {/* Registers Matrix Preview */}
+                <div className="grid grid-cols-4 gap-2 font-mono text-center text-xs">
+                  <div className="p-2 rounded bg-zinc-950 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 block">A (ACC)</span>
+                    <span className="text-emerald-400 font-bold">0x42</span>
+                  </div>
+                  <div className="p-2 rounded bg-zinc-950 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 block">B-C</span>
+                    <span className="text-cyan-400 font-bold">0x0001</span>
+                  </div>
+                  <div className="p-2 rounded bg-zinc-950 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 block">H-L</span>
+                    <span className="text-amber-400 font-bold">0x0FFF</span>
+                  </div>
+                  <div className="p-2 rounded bg-zinc-950 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 block">SP</span>
+                    <span className="text-zinc-300 font-bold">0x20FF</span>
+                  </div>
+                </div>
+
+                {/* Flags Preview */}
+                <div className="flex items-center justify-between p-2.5 rounded bg-zinc-950 border border-zinc-800 text-[11px] font-mono">
+                  <span className="text-zinc-500">PSW FLAGS:</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">S:0</span>
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 font-bold">Z:1</span>
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 font-bold">AC:1</span>
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 font-bold">P:1</span>
+                    <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">CY:0</span>
+                    <span className="px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-300 font-bold">V:0</span>
+                  </div>
+                </div>
+
+                <div className="pt-1">
+                  <Link
+                    href="/simulator"
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold py-2 text-xs transition-colors"
+                  >
+                    Open Live Interactive Studio
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Link>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
+
+      {/* ─── Silicon Benchmarks & Scorecard ─── */}
+      <section id="benchmarks" className="py-16 border-b border-zinc-900 bg-zinc-950">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8">
+          <div className="text-center max-w-3xl mx-auto space-y-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20">
+              <Award className="h-3.5 w-3.5" />
+              Verified Silicon Test Suites
+            </div>
+            <h2 className="text-3xl font-extrabold text-zinc-100">
+              Tested Beyond Standard Calculators
+            </h2>
+            <p className="text-sm text-zinc-400">
+              Most 8085 simulators calculate like high-level language interpreters. 8085 Studio replicates the physical logic gates of the Intel die, passing all industry torture test suites.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 space-y-2 text-center">
+              <div className="text-2xl font-black font-mono text-emerald-400">0xFF</div>
+              <h3 className="font-semibold text-xs text-zinc-200">Suites 1–3: Torture Test</h3>
+              <p className="text-[11px] text-zinc-500 leading-normal">
+                Rotates & carry, DAA decimal adjust, parity, signed flag transitions.
+              </p>
+              <div className="text-[10px] font-mono text-emerald-400/80 bg-emerald-950/40 py-0.5 rounded">PASSED</div>
+            </div>
+
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 space-y-2 text-center">
+              <div className="text-2xl font-black font-mono text-cyan-400">0xCC</div>
+              <h3 className="font-semibold text-xs text-zinc-200">Suite 4: Quirks & SMC</h3>
+              <p className="text-[11px] text-zinc-500 leading-normal">
+                Self-modifying code, PSW hijacking, and RST 1 vector jumps.
+              </p>
+              <div className="text-[10px] font-mono text-cyan-400/80 bg-cyan-950/40 py-0.5 rounded">PASSED</div>
+            </div>
+
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 space-y-2 text-center">
+              <div className="text-2xl font-black font-mono text-blue-400">0x99</div>
+              <h3 className="font-semibold text-xs text-zinc-200">Suite 5: Final Boss</h3>
+              <p className="text-[11px] text-zinc-500 leading-normal">
+                EI, DI, IE flip-flop latching, SIM serial output, and RIM read mask.
+              </p>
+              <div className="text-[10px] font-mono text-blue-400/80 bg-blue-950/40 py-0.5 rounded">PASSED</div>
+            </div>
+
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-4 space-y-2 text-center">
+              <div className="text-2xl font-black font-mono text-amber-400">0x77</div>
+              <h3 className="font-semibold text-xs text-zinc-200">Suite 6: Silicon Anomalies</h3>
+              <p className="text-[11px] text-zinc-500 leading-normal">
+                2&apos;s complement SUB A (AC=1), ANA bit-3 OR quirk, and DCR carry-out.
+              </p>
+              <div className="text-[10px] font-mono text-amber-400/80 bg-amber-950/40 py-0.5 rounded">PASSED</div>
+            </div>
+
+            <div className="border border-purple-800/40 bg-purple-950/10 rounded-xl p-4 space-y-2 text-center">
+              <div className="text-2xl font-black font-mono text-purple-400">0x88</div>
+              <h3 className="font-semibold text-xs text-purple-200">Suite 7: Ghost Opcodes</h3>
+              <p className="text-[11px] text-zinc-500 leading-normal">
+                God Tier: 16-bit DSUB, ARHL shift, RDEL rotate, and SHLX/LHLX.
+              </p>
+              <div className="text-[10px] font-mono text-purple-400 bg-purple-900/40 py-0.5 rounded">GOD TIER</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ─── Core Features Section ─── */}
+      <section id="features" className="py-20 border-b border-zinc-900 bg-linear-to-b from-zinc-950 via-zinc-900/20 to-zinc-950">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+          <div className="text-center max-w-3xl mx-auto space-y-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+              <Zap className="h-3.5 w-3.5" />
+              Engineered for Deep Learning
+            </div>
+            <h2 className="text-3xl font-extrabold text-zinc-100">
+              Everything Needed to Master Assembly
+            </h2>
+            <p className="text-sm text-zinc-400">
+              From two-pass assembler diagnostics to animated silicon bus logic, every component was designed for clarity and speed.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="bg-zinc-900/40 border border-zinc-800 hover:border-zinc-700 transition-colors rounded-2xl p-6 space-y-3">
+              <div className="h-10 w-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                <Code2 className="h-5 w-5" />
+              </div>
+              <h3 className="font-bold text-base text-zinc-100">Two-Pass Intelligent Assembler</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Full support for labels, symbol arithmetic, and tolerant notations (<code className="text-zinc-300">MOV A, [HL]</code>, <code className="text-zinc-300">MOV [2050H], A</code>). Instant line-by-line syntax error diagnostics and machine code generator.
+              </p>
+            </div>
+
+            <div className="bg-zinc-900/40 border border-zinc-800 hover:border-zinc-700 transition-colors rounded-2xl p-6 space-y-3">
+              <div className="h-10 w-10 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                <Activity className="h-5 w-5" />
+              </div>
+              <h3 className="font-bold text-base text-zinc-100">Animated Bus & Data Flow</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Watch data traverse the internal bus in real-time. Highlights source and destination registers, memory address lines, stack pointers, and ALU operations with animated particles.
+              </p>
+            </div>
+
+            <div className="bg-zinc-900/40 border border-zinc-800 hover:border-zinc-700 transition-colors rounded-2xl p-6 space-y-3">
+              <div className="h-10 w-10 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400">
+                <Sparkles className="h-5 w-5" />
+              </div>
+              <h3 className="font-bold text-base text-zinc-100">All 10 Ghost Opcodes</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Replicate undocumented 8085 silicon opcodes including <code className="text-purple-300">DSUB</code> (16-bit subtract), <code className="text-purple-300">ARHL</code>, <code className="text-purple-300">RDEL</code>, <code className="text-purple-300">SHLX</code>, <code className="text-purple-300">LHLX</code>, and <code className="text-purple-300">RSTV</code>.
+              </p>
+            </div>
+
+            <div className="bg-zinc-900/40 border border-zinc-800 hover:border-zinc-700 transition-colors rounded-2xl p-6 space-y-3">
+              <div className="h-10 w-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                <FolderTree className="h-5 w-5" />
+              </div>
+              <h3 className="font-bold text-base text-zinc-100">Virtual File System & Auto-Save</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Organize projects with nested folders and files in local storage. Automatic 10-second debounced auto-save prevents lost work during intense coding sessions.
+              </p>
+            </div>
+
+            <div className="bg-zinc-900/40 border border-zinc-800 hover:border-zinc-700 transition-colors rounded-2xl p-6 space-y-3">
+              <div className="h-10 w-10 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+                <Database className="h-5 w-5" />
+              </div>
+              <h3 className="font-bold text-base text-zinc-100">64KB Linear Hex Inspector</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Explore the entire address space (0000H - FFFFH). Click any byte to modify memory directly. Live step memory deltas highlight writes and stack modifications in distinct colors.
+              </p>
+            </div>
+
+            <div className="bg-zinc-900/40 border border-zinc-800 hover:border-zinc-700 transition-colors rounded-2xl p-6 space-y-3">
+              <div className="h-10 w-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                <Sliders className="h-5 w-5" />
+              </div>
+              <h3 className="font-bold text-base text-zinc-100">Two-Pointer Algorithm Visualizer</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed">
+                Automatically detects Left (<code className="text-amber-300">HL</code>) and Right (<code className="text-cyan-300">DE</code>) pointers as your code operates on arrays, helping visualize sorting, searching, and comparisons.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ─── Algorithm Presets Showcase ─── */}
+      <section id="presets" className="py-20 border-b border-zinc-900 bg-zinc-950">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-12">
+          <div className="text-center max-w-3xl mx-auto space-y-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <Terminal className="h-3.5 w-3.5" />
+              Built-In Program Presets
+            </div>
+            <h2 className="text-3xl font-extrabold text-zinc-100">
+              Pre-loaded with Real-World Algorithms
+            </h2>
+            <p className="text-sm text-zinc-400">
+              Jump straight into running classic microcode programs with pre-configured memory arrays and data pointers.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {PRESET_PROGRAMS.map((preset) => (
+              <div
+                key={preset.id}
+                className="bg-zinc-900/50 border border-zinc-800 hover:border-emerald-500/40 transition-all rounded-2xl p-5 flex flex-col justify-between space-y-4 group"
+              >
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-bold text-sm text-zinc-100 group-hover:text-emerald-400 transition-colors">
+                      {preset.name}
+                    </h3>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">
+                      8085 ASM
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    {preset.description}
+                  </p>
+                </div>
+
+                <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between">
+                  <span className="text-[11px] font-mono text-zinc-500">
+                    RAM @ {preset.initialMemory?.[0]?.address.toString(16).toUpperCase().padStart(4, '0')}H
+                  </span>
+                  <Link
+                    href="/simulator"
+                    className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    Simulate
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ─── Bottom CTA Banner ─── */}
+      <section className="py-20 bg-linear-to-b from-zinc-950 to-zinc-900/60">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-6">
+          <h2 className="text-3xl sm:text-4xl font-black text-zinc-100 tracking-tight">
+            Start Simulating 8085 Microcode Today
+          </h2>
+          <p className="text-sm sm:text-base text-zinc-400 max-w-2xl mx-auto leading-relaxed">
+            No installations, no emulators to build. 8085 Studio runs entirely in your browser with high performance WebAssembly speeds, offline support, and complete documentation.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
+            <Link
+              href="/simulator"
+              className="inline-flex items-center gap-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold px-7 py-4 text-sm shadow-xl shadow-emerald-500/25 transition-all hover:scale-105 active:scale-95"
+            >
+              <Play className="h-4 w-4 fill-current" />
+              Launch 8085 Simulator
+              <ArrowRight className="h-4 w-4 ml-1" />
+            </Link>
+            <Link
+              href="/instructions"
+              className="inline-flex items-center gap-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-200 font-semibold px-6 py-4 text-sm transition-colors"
+            >
+              <BookOpen className="h-4 w-4 text-cyan-400" />
+              Read Usage Manual
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* ─── Footer ─── */}
+      <footer className="mt-auto border-t border-zinc-900 bg-zinc-950 py-10 text-xs text-zinc-500">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
+            <div className="h-6 w-6 rounded-md bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+              <Cpu className="h-3.5 w-3.5" />
+            </div>
+            <span className="font-semibold text-zinc-300">8085 Studio</span>
+            <span>— Cycle-accurate Intel 8085 Microprocessor Environment</span>
+          </div>
+
+          <div className="flex items-center gap-6">
+            <Link href="/simulator" className="hover:text-zinc-300 transition-colors">Simulator</Link>
+            <Link href="/instructions" className="hover:text-zinc-300 transition-colors">Usage Instructions</Link>
+            <Link href="/instructions#isa" className="hover:text-zinc-300 transition-colors">Opcode Table</Link>
+            <Link href="/instructions#silicon-quirks" className="hover:text-zinc-300 transition-colors">Silicon Quirks</Link>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

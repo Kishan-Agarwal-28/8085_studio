@@ -264,9 +264,11 @@ async function seedDefaultFilesIfEmpty(root: FileSystemDirectoryHandle): Promise
   let hasEntries = false;
   try {
     // @ts-expect-error - values() on directory handle
-    for await (const _ of root.values()) {
-      hasEntries = true;
-      break;
+    for await (const entry of root.values()) {
+      if (entry) {
+        hasEntries = true;
+        break;
+      }
     }
   } catch {
     hasEntries = false;

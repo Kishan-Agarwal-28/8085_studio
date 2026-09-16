@@ -27,12 +27,12 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [speed, setSpeed] = useState<number>(1);
   const [viewBaseAddress, setViewBaseAddress] = useState<number>(baseAddress);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Sync base address when preset changes
-  useEffect(() => {
+  const [prevBaseAddress, setPrevBaseAddress] = useState<number>(baseAddress);
+  if (baseAddress !== prevBaseAddress) {
+    setPrevBaseAddress(baseAddress);
     setViewBaseAddress(baseAddress);
-  }, [baseAddress]);
+  }
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Current active step snapshot
   const activeStep = steps.length > 0 && currentStep < steps.length ? steps[currentStep] : undefined;

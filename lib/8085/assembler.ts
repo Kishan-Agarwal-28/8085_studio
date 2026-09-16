@@ -340,7 +340,6 @@ export class Assembler8085 {
       case 'MOV': {
         if (operands.length === 2) {
           const dstRaw = operands[0].trim().toUpperCase();
-          const srcRaw = operands[1].trim().toUpperCase();
           const dstNorm = this.normalizeReg(operands[0]);
           const srcNorm = this.normalizeReg(operands[1]);
           const regNames = ['B', 'C', 'D', 'E', 'H', 'L', 'M', 'A'];

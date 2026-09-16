@@ -26,7 +26,6 @@ import {
   deleteEntry,
   renameEntry,
   isOPFSSupported,
-  splitPath,
 } from '@/lib/opfs/filesystem';
 import { toast } from '@/components/ui/toast';
 import {
@@ -60,7 +59,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
     new Set(['/examples', '/my_programs'])
   );
   const [loading, setLoading] = useState(false);
-  const [isOpfs, setIsOpfs] = useState(true);
+  const [isOpfs] = useState(() => (typeof window !== 'undefined' ? isOPFSSupported() : true));
 
   // Inline creation state: { parentPath: string, type: 'file' | 'folder' } | null
   const [creating, setCreating] = useState<{ parentPath: string; type: 'file' | 'folder' } | null>(null);
@@ -97,7 +96,6 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({
   }, []);
 
   useEffect(() => {
-    setIsOpfs(isOPFSSupported());
     initFileSystem()
       .then((nodes) => {
         setTree(nodes);
@@ -173,10 +171,11 @@ HLT
           type: 'success',
         });
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       toast.add({
         title: 'Creation Failed',
-        description: err.message || 'Could not create item',
+        description: msg || 'Could not create item',
         type: 'error',
       });
     } finally {
@@ -219,10 +218,11 @@ HLT
         description: `Renamed to "${newName}"`,
         type: 'success',
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       toast.add({
         title: 'Rename Failed',
-        description: err.message || 'Could not rename item',
+        description: msg || 'Could not rename item',
         type: 'error',
       });
     } finally {
@@ -256,10 +256,11 @@ HLT
         description: `Deleted "${name}"`,
         type: 'info',
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       toast.add({
         title: 'Delete Failed',
-        description: err.message || 'Could not delete item',
+        description: msg || 'Could not delete item',
         type: 'error',
       });
     }
@@ -586,7 +587,7 @@ HLT
               Delete {deleteTarget?.kind === 'directory' ? 'Folder' : 'File'}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-xs text-zinc-400">
-              Are you sure you want to delete <span className="font-semibold text-zinc-200">"{deleteTarget?.name}"</span>?
+              Are you sure you want to delete <span className="font-semibold text-zinc-200">&quot;{deleteTarget?.name}&quot;</span>?
               {deleteTarget?.kind === 'directory' && ' All contents inside will also be deleted.'} This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>

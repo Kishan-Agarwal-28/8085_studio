@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import {
   ArrowRight,
   Cpu,
@@ -31,6 +31,94 @@ const springTransition = { type: 'spring' as const, stiffness: 300, damping: 30 
 
 const toHex = (val: number, pad = 2) => (val ?? 0).toString(16).toUpperCase().padStart(pad, '0');
 
+interface RegisterBoxProps {
+  name: string;
+  subLabel?: string;
+  value: number;
+  is16Bit?: boolean;
+  className?: string;
+  isTemp?: boolean;
+  isActive?: boolean;
+  activeRegisters?: string[];
+}
+
+const RegisterBox: React.FC<RegisterBoxProps> = ({
+  name,
+  subLabel,
+  value,
+  is16Bit = false,
+  className = '',
+  isTemp = false,
+  isActive: propIsActive,
+  activeRegisters = [],
+}) => {
+  const regKey = name.split(' ')[0];
+  const isActive = propIsActive ?? activeRegisters.includes(regKey);
+  return (
+    <motion.div
+    layout
+    className={`flex flex-col justify-between p-2.5 rounded-lg border border-zinc-800 transition-shadow ${
+      isTemp ? 'bg-zinc-900/60 border-dashed border-zinc-700/80' : 'bg-zinc-900/90'
+    } ${isActive ? 'shadow-md shadow-amber-500/20' : ''} ${className}`}
+    initial={false}
+    animate={{
+      scale: isActive ? 1.05 : 1,
+      y: isActive ? -4 : 0,
+      backgroundColor: isActive ? '#f59e0b' : isTemp ? '#1c1917' : '#27272a',
+      color: isActive ? '#09090b' : '#fafafa',
+      borderColor: isActive ? '#f59e0b' : '#3f3f46',
+    }}
+    transition={springTransition}
+  >
+    <div className="flex items-center justify-between">
+      <span className="text-xs font-bold tracking-tight">{name}</span>
+      {subLabel && (
+        <span
+          className={`text-[9px] font-mono uppercase px-1 py-0.2 rounded ${
+            isActive ? 'bg-zinc-950/20 text-zinc-900 font-semibold' : 'text-zinc-500 bg-zinc-950'
+          }`}
+        >
+          {subLabel}
+        </span>
+      )}
+    </div>
+    <div className="flex items-baseline justify-between mt-1.5">
+      <span className="font-mono text-base font-black">
+        {toHex(value, is16Bit ? 4 : 2)}H
+      </span>
+      <span className={`font-mono text-[10px] ${isActive ? 'text-zinc-900' : 'text-zinc-400'}`}>
+        {value}
+      </span>
+    </div>
+  </motion.div>
+  );
+};
+
+interface FlagToggleProps {
+  name: string;
+  value: boolean;
+  desc: string;
+}
+
+const FlagToggle: React.FC<FlagToggleProps> = ({ name, value, desc }) => (
+  <div className="flex flex-col items-center justify-center gap-1" title={desc}>
+    <span className="text-[10px] text-zinc-400 font-bold">{name}</span>
+    <motion.div
+      layout
+      className="w-7 h-7 rounded-md border flex items-center justify-center text-xs font-mono font-bold shadow-sm"
+      animate={{
+        backgroundColor: value ? '#10b981' : '#27272a',
+        color: value ? '#ffffff' : '#71717a',
+        borderColor: value ? '#059669' : '#3f3f46',
+        scale: value ? 1.08 : 1,
+      }}
+      transition={springTransition}
+    >
+      {value ? '1' : '0'}
+    </motion.div>
+  </div>
+);
+
 export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
   steps,
   memory,
@@ -41,14 +129,15 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
 }) => {
   // Direct Memory Jump State
   const [jumpInput, setJumpInput] = useState(toHex(memBaseAddress, 4));
+  const [prevMemBaseAddress, setPrevMemBaseAddress] = useState(memBaseAddress);
+  if (memBaseAddress !== prevMemBaseAddress) {
+    setPrevMemBaseAddress(memBaseAddress);
+    setJumpInput(toHex(memBaseAddress, 4));
+  }
+
   // Memory Cell Editing State
   const [editingAddr, setEditingAddr] = useState<number | null>(null);
   const [cellInputVal, setCellInputVal] = useState<string>('');
-
-  // Sync jump input when memBaseAddress changes externally
-  useEffect(() => {
-    setJumpInput(toHex(memBaseAddress, 4));
-  }, [memBaseAddress]);
 
   // Auto-follow active memory address during step/playback if outside visible range
   const currentStepData = steps[currentStep];
@@ -132,92 +221,6 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
     badgeColor = 'bg-orange-500/15 text-orange-400 border-orange-500/30';
   }
 
-  // Register Box Component
-  const RegisterBox = ({
-    name,
-    subLabel,
-    value,
-    is16Bit = false,
-    className = '',
-    isTemp = false,
-  }: {
-    name: string;
-    subLabel?: string;
-    value: number;
-    is16Bit?: boolean;
-    className?: string;
-    isTemp?: boolean;
-  }) => {
-    const regKey = name.split(' ')[0];
-    const isActive = activeRegisters.includes(regKey);
-
-    return (
-      <motion.div
-        layout
-        className={`flex flex-col justify-between p-2.5 rounded-lg border border-zinc-800 transition-shadow ${
-          isTemp ? 'bg-zinc-900/60 border-dashed border-zinc-700/80' : 'bg-zinc-900/90'
-        } ${isActive ? 'shadow-md shadow-amber-500/20' : ''} ${className}`}
-        initial={false}
-        animate={{
-          scale: isActive ? 1.05 : 1,
-          y: isActive ? -4 : 0,
-          backgroundColor: isActive ? '#f59e0b' : isTemp ? '#1c1917' : '#27272a',
-          color: isActive ? '#09090b' : '#fafafa',
-          borderColor: isActive ? '#f59e0b' : '#3f3f46',
-        }}
-        transition={springTransition}
-      >
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-bold tracking-tight">{name}</span>
-          {subLabel && (
-            <span
-              className={`text-[9px] font-mono uppercase px-1 py-0.2 rounded ${
-                isActive ? 'bg-zinc-950/20 text-zinc-900 font-semibold' : 'text-zinc-500 bg-zinc-950'
-              }`}
-            >
-              {subLabel}
-            </span>
-          )}
-        </div>
-        <div className="flex items-baseline justify-between mt-1.5">
-          <span className="font-mono text-base font-black">
-            {toHex(value, is16Bit ? 4 : 2)}H
-          </span>
-          <span className={`font-mono text-[10px] ${isActive ? 'text-zinc-900' : 'text-zinc-400'}`}>
-            {value}
-          </span>
-        </div>
-      </motion.div>
-    );
-  };
-
-  // Flag indicator
-  const FlagToggle = ({
-    name,
-    value,
-    desc,
-  }: {
-    name: string;
-    value: boolean;
-    desc: string;
-  }) => (
-    <div className="flex flex-col items-center justify-center gap-1" title={desc}>
-      <span className="text-[10px] text-zinc-400 font-bold">{name}</span>
-      <motion.div
-        layout
-        className="w-7 h-7 rounded-md border flex items-center justify-center text-xs font-mono font-bold shadow-sm"
-        animate={{
-          backgroundColor: value ? '#10b981' : '#27272a',
-          color: value ? '#ffffff' : '#71717a',
-          borderColor: value ? '#059669' : '#3f3f46',
-          scale: value ? 1.08 : 1,
-        }}
-        transition={springTransition}
-      >
-        {value ? '1' : '0'}
-      </motion.div>
-    </div>
-  );
 
   return (
     <div className="w-full bg-zinc-950 text-zinc-100 rounded-xl border border-zinc-800/80 overflow-hidden flex flex-col shadow-2xl space-y-4 p-4">
@@ -273,6 +276,7 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
               name="A (Accumulator)"
               subLabel="ALU In 1"
               value={registers.A}
+              activeRegisters={activeRegisters}
               className="border-cyan-500/30"
             />
             {/* Temporary Register (TEMP) Card */}
@@ -280,6 +284,7 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
               name="TEMP Register"
               subLabel="ALU In 2"
               value={registers.TEMP}
+              activeRegisters={activeRegisters}
               isTemp
               className="border-amber-500/30"
             />
@@ -385,12 +390,14 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
                 name="W"
                 subLabel="Temp High Byte"
                 value={registers.W}
+                activeRegisters={activeRegisters}
                 isTemp
               />
               <RegisterBox
                 name="Z"
                 subLabel="Temp Low Byte"
                 value={registers.Z}
+                activeRegisters={activeRegisters}
                 isTemp
               />
             </div>
@@ -408,8 +415,8 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
                 <span>0x{toHex(registers.B, 2)}{toHex(registers.C, 2)}H</span>
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                <RegisterBox name="B" value={registers.B} />
-                <RegisterBox name="C" value={registers.C} />
+                <RegisterBox name="B" value={registers.B} activeRegisters={activeRegisters} />
+                <RegisterBox name="C" value={registers.C} activeRegisters={activeRegisters} />
               </div>
             </div>
 
@@ -420,8 +427,8 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
                 <span className="text-zinc-400">0x{toHex(registers.D, 2)}{toHex(registers.E, 2)}H</span>
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                <RegisterBox name="D" value={registers.D} />
-                <RegisterBox name="E" value={registers.E} />
+                <RegisterBox name="D" value={registers.D} activeRegisters={activeRegisters} />
+                <RegisterBox name="E" value={registers.E} activeRegisters={activeRegisters} />
               </div>
             </div>
 
@@ -438,8 +445,8 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
                 <span className="text-zinc-400">0x{toHex(registers.H, 2)}{toHex(registers.L, 2)}H</span>
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                <RegisterBox name="H" value={registers.H} />
-                <RegisterBox name="L" value={registers.L} />
+                <RegisterBox name="H" value={registers.H} activeRegisters={activeRegisters} />
+                <RegisterBox name="L" value={registers.L} activeRegisters={activeRegisters} />
               </div>
 
               {/* Virtual Memory Register M [HL] Indicator */}
@@ -474,12 +481,14 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
               name="Program Counter (PC)"
               subLabel="16-bit Code Pointer"
               value={registers.PC}
+              activeRegisters={activeRegisters}
               is16Bit
             />
             <RegisterBox
               name="Stack Pointer (SP)"
               subLabel="16-bit Stack Top"
               value={registers.SP}
+              activeRegisters={activeRegisters}
               is16Bit
             />
           </div>
@@ -606,7 +615,7 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
                 <div className="px-1.5 py-0.5 bg-cyan-500 text-zinc-950 text-[10px] font-black rounded shadow">
                   L (HL)
                 </div>
-                <div className="w-0 h-0 border-l-[4px] border-r-[4px] border-t-[5px] border-l-transparent border-r-transparent border-t-cyan-500" />
+                <div className="w-0 h-0 border-l-4 border-r-4 border-t-[5px] border-l-transparent border-r-transparent border-t-cyan-500" />
               </motion.div>
             )}
 
@@ -621,7 +630,7 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
                 <div className="px-1.5 py-0.5 bg-purple-500 text-white text-[10px] font-black rounded shadow">
                   R (DE)
                 </div>
-                <div className="w-0 h-0 border-l-[4px] border-r-[4px] border-t-[5px] border-l-transparent border-r-transparent border-t-purple-500" />
+                <div className="w-0 h-0 border-l-4 border-r-4 border-t-[5px] border-l-transparent border-r-transparent border-t-purple-500" />
               </motion.div>
             )}
 
