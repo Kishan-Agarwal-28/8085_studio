@@ -99,7 +99,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({
       </div>
 
       {/* Pointer Track and Array View Area */}
-      <div className="relative overflow-x-auto pb-4 pt-8 px-2 select-none">
+      <div className="relative overflow-x-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-zinc-900/50 hover:scrollbar-thumb-zinc-500 pb-4 pt-8 px-2 select-none">
         {/* Pointer Markers Track (L & R Markers) */}
         <div className="absolute top-1 left-2 h-7 w-full pointer-events-none">
           {/* 'L' Pointer Marker */}

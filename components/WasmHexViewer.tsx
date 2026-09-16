@@ -113,7 +113,7 @@ export const WasmHexViewer: React.FC<WasmHexViewerProps> = ({
           </div>
         </div>
 
-        <pre className="max-h-40 overflow-y-auto rounded-lg bg-black/90 p-3 font-mono text-xs text-emerald-400 border border-zinc-850 select-text leading-relaxed">
+        <pre className="max-h-40 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-zinc-950/60 hover:scrollbar-thumb-zinc-500 rounded-lg bg-black/90 p-3 font-mono text-xs text-emerald-400 border border-zinc-850 select-text leading-relaxed">
           {compileResult?.hexDump || '; Compile your code to view the opcode hex dump'}
         </pre>
       </div>

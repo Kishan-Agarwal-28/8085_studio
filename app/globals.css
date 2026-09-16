@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@plugin 'tailwind-scrollbar';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -127,4 +128,38 @@
   html {
     @apply font-sans;
   }
+
+  /* Global Scrollbar Utility for all scrollable elements across the app */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(113, 113, 122, 0.4) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgba(113, 113, 122, 0.4);
+    border-radius: 9999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(161, 161, 170, 0.6);
+  }
+
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/* Monaco Editor Active Execution Line */
+.active-exec-line {
+  background-color: rgba(34, 197, 94, 0.8) !important;
+  border-left: 4px solid #22c55e !important;
 }

@@ -17,8 +17,24 @@ export interface RegisterState {
   E: number;
   H: number;
   L: number;
+  W: number;    // Internal Temporary Register W (high byte)
+  Z: number;    // Internal Temporary Register Z (low byte)
+  TEMP: number; // ALU Temporary Register (second operand)
   PC: number;
   SP: number;
+}
+
+export interface AluOperation {
+  type: 'CMP' | 'ADD' | 'SUB' | 'ANA' | 'XRA' | 'ORA' | 'INR' | 'DCR' | 'ROT' | 'DAA' | 'CMA';
+  name: string;
+  operatorSymbol: string;
+  operandA: number;
+  operandB: number;
+  operandBName: string;
+  result: number;
+  comparisonResult?: string;
+  flagsAffected: ('S' | 'Z' | 'AC' | 'P' | 'CY')[];
+  explanation: string;
 }
 
 export interface DataTransferEvent {
@@ -42,6 +58,7 @@ export interface TraceStep {
   flags: StatusFlags;
   description: string;
   dataTransfer?: DataTransferEvent;
+  aluOperation?: AluOperation;
   // Pointers for algorithm visualizer (e.g. array two-pointer algorithms)
   pointerL?: number; // memory address or array index
   pointerR?: number; // memory address or array index

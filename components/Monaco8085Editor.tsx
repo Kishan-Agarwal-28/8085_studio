@@ -95,9 +95,9 @@ export const Monaco8085Editor: React.FC<Monaco8085EditorProps> = ({
         'editor.background': '#09090b',
         'editor.foreground': '#f4f4f5',
         'editor.lineHighlightBackground': '#18181b',
-        'editorCursor.foreground': '#f59e0b',
+        'editorCursor.foreground': '#06b6d4',
         'editorLineNumber.foreground': '#52525b',
-        'editorLineNumber.activeForeground': '#f59e0b',
+        'editorLineNumber.activeForeground': '#06b6d4',
       },
     });
   };
@@ -147,8 +147,8 @@ export const Monaco8085Editor: React.FC<Monaco8085EditorProps> = ({
         range: new monaco.Range(activeLine, 1, activeLine, 1),
         options: {
           isWholeLine: true,
-          className: 'bg-amber-500/20 border-l-4 border-amber-500',
-          glyphMarginClassName: 'text-amber-400 font-bold',
+          className: 'active-exec-line bg-green-500/80 border-l-4 border-green-500',
+          glyphMarginClassName: 'text-green-500 font-bold',
         },
       },
     ];

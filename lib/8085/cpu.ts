@@ -1,4 +1,4 @@
-import { RegisterState, StatusFlags, TraceStep, DataTransferEvent } from './types';
+import { RegisterState, StatusFlags, TraceStep, DataTransferEvent, AluOperation } from './types';
 import { getOpcodeSpec } from './opcodes';
 
 export class CPU8085 {
@@ -10,6 +10,9 @@ export class CPU8085 {
   private E = 0;
   private H = 0;
   private L = 0;
+  private W = 0;    // Internal Temporary Register W
+  private Z = 0;    // Internal Temporary Register Z
+  private TEMP = 0; // ALU Temporary Register
   private PC = 0x2000;
   private SP = 0xFFFF;
 
@@ -42,6 +45,9 @@ export class CPU8085 {
     this.E = 0;
     this.H = 0;
     this.L = 0;
+    this.W = 0;
+    this.Z = 0;
+    this.TEMP = 0;
     this.PC = startAddress;
     this.SP = 0xFFFF;
     this.flags = { s: false, z: false, ac: false, p: false, cy: false };
@@ -65,6 +71,9 @@ export class CPU8085 {
       E: this.E,
       H: this.H,
       L: this.L,
+      W: this.W,
+      Z: this.Z,
+      TEMP: this.TEMP,
       PC: this.PC,
       SP: this.SP,
     };
@@ -219,6 +228,7 @@ export class CPU8085 {
     const activeRegisters: string[] = [];
     const activeMemoryAddresses: number[] = [];
     let dataTransfer: DataTransferEvent | undefined;
+    let aluOperation: AluOperation | undefined;
     let description = spec ? spec.description : `Executed opcode 0x${opcode.toString(16).toUpperCase()}`;
 
     // Read bytes for this instruction
@@ -331,10 +341,12 @@ export class CPU8085 {
     }
     // 5. LDA a16
     else if (opcode === 0x3A) {
-      const addr = bytes[1] | (bytes[2] << 8);
+      this.Z = bytes[1];
+      this.W = bytes[2];
+      const addr = this.Z | (this.W << 8);
       const val = this.memory[addr];
       this.A = val;
-      activeRegisters.push('A');
+      activeRegisters.push('A', 'W', 'Z');
       activeMemoryAddresses.push(addr);
       dataTransfer = {
         sourceType: 'memory',
@@ -344,15 +356,17 @@ export class CPU8085 {
         destinationName: 'A',
         value: val,
       };
-      description = `LDA ${addr.toString(16).toUpperCase()}H: Loaded 0x${val.toString(16).padStart(2, '0').toUpperCase()} from memory [${addr.toString(16).toUpperCase()}H] into Accumulator`;
+      description = `LDA ${addr.toString(16).toUpperCase()}H: Address loaded to W-Z (${addr.toString(16).toUpperCase()}H). Loaded 0x${val.toString(16).padStart(2, '0').toUpperCase()} into Accumulator.`;
     }
     // 6. STA a16
     else if (opcode === 0x32) {
-      const addr = bytes[1] | (bytes[2] << 8);
+      this.Z = bytes[1];
+      this.W = bytes[2];
+      const addr = this.Z | (this.W << 8);
       const oldVal = this.memory[addr];
       this.memory[addr] = this.A;
       memDelta.push({ address: addr, oldValue: oldVal, newValue: this.A });
-      activeRegisters.push('A');
+      activeRegisters.push('A', 'W', 'Z');
       activeMemoryAddresses.push(addr);
       dataTransfer = {
         sourceType: 'register',
@@ -362,29 +376,33 @@ export class CPU8085 {
         destinationAddress: addr,
         value: this.A,
       };
-      description = `STA ${addr.toString(16).toUpperCase()}H: Stored Accumulator value 0x${this.A.toString(16).padStart(2, '0').toUpperCase()} into memory [${addr.toString(16).toUpperCase()}H]`;
+      description = `STA ${addr.toString(16).toUpperCase()}H: Address loaded to W-Z (${addr.toString(16).toUpperCase()}H). Stored Accumulator value 0x${this.A.toString(16).padStart(2, '0').toUpperCase()} into memory.`;
     }
     // 7. LHLD a16
     else if (opcode === 0x2A) {
-      const addr = bytes[1] | (bytes[2] << 8);
+      this.Z = bytes[1];
+      this.W = bytes[2];
+      const addr = this.Z | (this.W << 8);
       this.L = this.memory[addr];
       this.H = this.memory[(addr + 1) & 0xFFFF];
-      activeRegisters.push('H', 'L');
+      activeRegisters.push('H', 'L', 'W', 'Z');
       activeMemoryAddresses.push(addr, (addr + 1) & 0xFFFF);
-      description = `LHLD ${addr.toString(16).toUpperCase()}H: Loaded H-L with 16-bit word from memory [${addr.toString(16).toUpperCase()}H]`;
+      description = `LHLD ${addr.toString(16).toUpperCase()}H: Address loaded to W-Z. Loaded H-L with 16-bit word from memory [${addr.toString(16).toUpperCase()}H]`;
     }
     // 8. SHLD a16
     else if (opcode === 0x22) {
-      const addr = bytes[1] | (bytes[2] << 8);
+      this.Z = bytes[1];
+      this.W = bytes[2];
+      const addr = this.Z | (this.W << 8);
       const oldL = this.memory[addr];
       const oldH = this.memory[(addr + 1) & 0xFFFF];
       this.memory[addr] = this.L;
       this.memory[(addr + 1) & 0xFFFF] = this.H;
       memDelta.push({ address: addr, oldValue: oldL, newValue: this.L });
       memDelta.push({ address: (addr + 1) & 0xFFFF, oldValue: oldH, newValue: this.H });
-      activeRegisters.push('H', 'L');
+      activeRegisters.push('H', 'L', 'W', 'Z');
       activeMemoryAddresses.push(addr, (addr + 1) & 0xFFFF);
-      description = `SHLD ${addr.toString(16).toUpperCase()}H: Stored H-L into memory [${addr.toString(16).toUpperCase()}H]`;
+      description = `SHLD ${addr.toString(16).toUpperCase()}H: Address loaded to W-Z. Stored H-L into memory [${addr.toString(16).toUpperCase()}H]`;
     }
     // 9. LDAX B / LDAX D
     else if (opcode === 0x0A || opcode === 0x1A) {
@@ -424,14 +442,14 @@ export class CPU8085 {
     }
     // 11. XCHG
     else if (opcode === 0xEB) {
-      const tempH = this.H;
-      const tempL = this.L;
+      this.W = this.H;
+      this.Z = this.L;
       this.H = this.D;
       this.L = this.E;
-      this.D = tempH;
-      this.E = tempL;
-      activeRegisters.push('H', 'L', 'D', 'E');
-      description = `XCHG: Swapped H-L (${this.getHL().toString(16).toUpperCase()}H) with D-E (${this.getDE().toString(16).toUpperCase()}H)`;
+      this.D = this.W;
+      this.E = this.Z;
+      activeRegisters.push('W', 'Z', 'H', 'L', 'D', 'E');
+      description = `XCHG: Swapped H-L (${this.getHL().toString(16).toUpperCase()}H) with D-E (${this.getDE().toString(16).toUpperCase()}H) via Temp Registers W-Z`;
     }
     // 12. Arithmetic ADD/ADC/SUB/SBB/ANA/XRA/ORA/CMP
     else if (opcode >= 0x80 && opcode <= 0xBF) {
@@ -439,12 +457,15 @@ export class CPU8085 {
       const srcIdx = opcode & 0x07;
       const srcName = this.getRegName(srcIdx);
       const val = this.readReg(srcIdx);
+      this.TEMP = val;
 
       if (srcName === 'M') {
         activeMemoryAddresses.push(this.getHL());
         activeRegisters.push('H', 'L');
       }
-      activeRegisters.push('A', srcName);
+      activeRegisters.push('A', 'TEMP', srcName);
+
+      const oldA = this.A;
 
       switch (opGroup) {
         case 0: { // ADD
@@ -453,7 +474,18 @@ export class CPU8085 {
           this.flags.cy = sum > 0xFF;
           this.A = sum & 0xFF;
           this.updateSZP(this.A);
-          description = `ADD ${srcName}: A = A + ${val} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()} (CY=${this.flags.cy ? 1 : 0}, Z=${this.flags.z ? 1 : 0})`;
+          aluOperation = {
+            type: 'ADD',
+            name: `ADD ${srcName}`,
+            operatorSymbol: '+',
+            operandA: oldA,
+            operandB: val,
+            operandBName: srcName,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `ALU: 0x${oldA.toString(16).toUpperCase()} + 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H (CY=${this.flags.cy ? 1 : 0}, Z=${this.flags.z ? 1 : 0})`,
+          };
+          description = `ADD ${srcName}: A = A + TEMP (${val}) -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 1: { // ADC
@@ -463,7 +495,18 @@ export class CPU8085 {
           this.flags.cy = sum > 0xFF;
           this.A = sum & 0xFF;
           this.updateSZP(this.A);
-          description = `ADC ${srcName}: A = A + ${val} + Carry -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'ADD',
+            name: `ADC ${srcName}`,
+            operatorSymbol: '+ CY +',
+            operandA: oldA,
+            operandB: val,
+            operandBName: srcName,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `ALU: 0x${oldA.toString(16).toUpperCase()} + 0x${val.toString(16).toUpperCase()} + CY(${carryIn}) = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `ADC ${srcName}: A = A + TEMP + Carry -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 2: { // SUB
@@ -472,7 +515,18 @@ export class CPU8085 {
           this.flags.cy = diff < 0;
           this.A = diff & 0xFF;
           this.updateSZP(this.A);
-          description = `SUB ${srcName}: A = A - ${val} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()} (CY=${this.flags.cy ? 1 : 0}, Z=${this.flags.z ? 1 : 0})`;
+          aluOperation = {
+            type: 'SUB',
+            name: `SUB ${srcName}`,
+            operatorSymbol: '-',
+            operandA: oldA,
+            operandB: val,
+            operandBName: srcName,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `ALU: 0x${oldA.toString(16).toUpperCase()} - 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H (CY=${this.flags.cy ? 1 : 0}, Z=${this.flags.z ? 1 : 0})`,
+          };
+          description = `SUB ${srcName}: A = A - TEMP (${val}) -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 3: { // SBB
@@ -482,7 +536,18 @@ export class CPU8085 {
           this.flags.cy = diff < 0;
           this.A = diff & 0xFF;
           this.updateSZP(this.A);
-          description = `SBB ${srcName}: A = A - ${val} - Borrow -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'SUB',
+            name: `SBB ${srcName}`,
+            operatorSymbol: '- Borrow -',
+            operandA: oldA,
+            operandB: val,
+            operandBName: srcName,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `ALU: 0x${oldA.toString(16).toUpperCase()} - 0x${val.toString(16).toUpperCase()} - Borrow(${borrow}) = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `SBB ${srcName}: A = A - TEMP - Borrow -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 4: { // ANA
@@ -490,7 +555,18 @@ export class CPU8085 {
           this.flags.cy = false;
           this.flags.ac = true;
           this.updateSZP(this.A);
-          description = `ANA ${srcName}: A = A & 0x${val.toString(16).toUpperCase()} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'ANA',
+            name: `ANA ${srcName}`,
+            operatorSymbol: '&',
+            operandA: oldA,
+            operandB: val,
+            operandBName: srcName,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'P', 'CY', 'AC'],
+            explanation: `ALU Bitwise AND: 0x${oldA.toString(16).toUpperCase()} & 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `ANA ${srcName}: A = A & TEMP (0x${val.toString(16).toUpperCase()}) -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 5: { // XRA
@@ -498,7 +574,18 @@ export class CPU8085 {
           this.flags.cy = false;
           this.flags.ac = false;
           this.updateSZP(this.A);
-          description = `XRA ${srcName}: A = A ^ 0x${val.toString(16).toUpperCase()} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'XRA',
+            name: `XRA ${srcName}`,
+            operatorSymbol: '^',
+            operandA: oldA,
+            operandB: val,
+            operandBName: srcName,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'P', 'CY', 'AC'],
+            explanation: `ALU Bitwise XOR: 0x${oldA.toString(16).toUpperCase()} ^ 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `XRA ${srcName}: A = A ^ TEMP (0x${val.toString(16).toUpperCase()}) -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 6: { // ORA
@@ -506,7 +593,18 @@ export class CPU8085 {
           this.flags.cy = false;
           this.flags.ac = false;
           this.updateSZP(this.A);
-          description = `ORA ${srcName}: A = A | 0x${val.toString(16).toUpperCase()} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'ORA',
+            name: `ORA ${srcName}`,
+            operatorSymbol: '|',
+            operandA: oldA,
+            operandB: val,
+            operandBName: srcName,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'P', 'CY', 'AC'],
+            explanation: `ALU Bitwise OR: 0x${oldA.toString(16).toUpperCase()} | 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `ORA ${srcName}: A = A | TEMP (0x${val.toString(16).toUpperCase()}) -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 7: { // CMP
@@ -514,7 +612,20 @@ export class CPU8085 {
           this.flags.ac = ((this.A & 0x0F) - (val & 0x0F)) < 0;
           this.flags.cy = diff < 0;
           this.updateSZP(diff & 0xFF);
-          description = `CMP ${srcName}: Compared A (0x${this.A.toString(16).toUpperCase()}) with ${srcName} (0x${val.toString(16).toUpperCase()}) -> ${this.A === val ? 'EQUAL (Z=1)' : this.A < val ? 'LESS (CY=1)' : 'GREATER'}`;
+          const compResultStr = this.A === val ? 'EQUAL (Z=1, CY=0)' : this.A < val ? 'A < TEMP (CY=1, Z=0)' : 'A > TEMP (CY=0, Z=0)';
+          aluOperation = {
+            type: 'CMP',
+            name: `CMP ${srcName}`,
+            operatorSymbol: 'VS',
+            operandA: this.A,
+            operandB: val,
+            operandBName: srcName,
+            result: diff & 0xFF,
+            comparisonResult: compResultStr,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `CMP performs subtraction (A - TEMP) in ALU. Result: ${compResultStr}. Flags updated: CY=${this.flags.cy ? 1 : 0}, Z=${this.flags.z ? 1 : 0}. Accumulator remains 0x${this.A.toString(16).toUpperCase()}H.`,
+          };
+          description = `CMP ${srcName}: A (0x${this.A.toString(16).toUpperCase()}) vs TEMP (0x${val.toString(16).toUpperCase()}) -> ${compResultStr}`;
           break;
         }
       }
@@ -523,7 +634,9 @@ export class CPU8085 {
     else if (opcode === 0xC6 || opcode === 0xCE || opcode === 0xD6 || opcode === 0xDE ||
              opcode === 0xE6 || opcode === 0xEE || opcode === 0xF6 || opcode === 0xFE) {
       const val = bytes[1];
-      activeRegisters.push('A');
+      this.TEMP = val;
+      activeRegisters.push('A', 'TEMP');
+      const oldA = this.A;
 
       switch (opcode) {
         case 0xC6: { // ADI
@@ -532,7 +645,18 @@ export class CPU8085 {
           this.flags.cy = sum > 0xFF;
           this.A = sum & 0xFF;
           this.updateSZP(this.A);
-          description = `ADI ${val.toString(16).toUpperCase()}H: A = A + ${val} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'ADD',
+            name: 'ADI (Add Immediate)',
+            operatorSymbol: '+',
+            operandA: oldA,
+            operandB: val,
+            operandBName: `Immediate ${val.toString(16).toUpperCase()}H`,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `ALU: 0x${oldA.toString(16).toUpperCase()} + 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H (CY=${this.flags.cy ? 1 : 0}, Z=${this.flags.z ? 1 : 0})`,
+          };
+          description = `ADI ${val.toString(16).toUpperCase()}H: A = A + TEMP -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 0xCE: { // ACI
@@ -542,7 +666,18 @@ export class CPU8085 {
           this.flags.cy = sum > 0xFF;
           this.A = sum & 0xFF;
           this.updateSZP(this.A);
-          description = `ACI ${val.toString(16).toUpperCase()}H: A = A + ${val} + Carry -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'ADD',
+            name: 'ACI (Add Immediate with Carry)',
+            operatorSymbol: '+ CY +',
+            operandA: oldA,
+            operandB: val,
+            operandBName: `Immediate ${val.toString(16).toUpperCase()}H`,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `ALU: 0x${oldA.toString(16).toUpperCase()} + 0x${val.toString(16).toUpperCase()} + CY(${carryIn}) = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `ACI ${val.toString(16).toUpperCase()}H: A = A + TEMP + Carry -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 0xD6: { // SUI
@@ -551,17 +686,39 @@ export class CPU8085 {
           this.flags.cy = diff < 0;
           this.A = diff & 0xFF;
           this.updateSZP(this.A);
-          description = `SUI ${val.toString(16).toUpperCase()}H: A = A - ${val} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'SUB',
+            name: 'SUI (Subtract Immediate)',
+            operatorSymbol: '-',
+            operandA: oldA,
+            operandB: val,
+            operandBName: `Immediate ${val.toString(16).toUpperCase()}H`,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `ALU: 0x${oldA.toString(16).toUpperCase()} - 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H (CY=${this.flags.cy ? 1 : 0}, Z=${this.flags.z ? 1 : 0})`,
+          };
+          description = `SUI ${val.toString(16).toUpperCase()}H: A = A - TEMP -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 0xDE: { // SBI
           const borrow = this.flags.cy ? 1 : 0;
           const diff = this.A - val - borrow;
-          this.flags.ac = ((this.A & 0x0F) - (val & 0x0F) - borrow) < 0;
+          this.flags.ac = ((this.A & 0x0F) - (val & 0x0F)) - borrow < 0;
           this.flags.cy = diff < 0;
           this.A = diff & 0xFF;
           this.updateSZP(this.A);
-          description = `SBI ${val.toString(16).toUpperCase()}H: A = A - ${val} - Borrow -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'SUB',
+            name: 'SBI (Subtract Immediate with Borrow)',
+            operatorSymbol: '- Borrow -',
+            operandA: oldA,
+            operandB: val,
+            operandBName: `Immediate ${val.toString(16).toUpperCase()}H`,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `ALU: 0x${oldA.toString(16).toUpperCase()} - 0x${val.toString(16).toUpperCase()} - Borrow(${borrow}) = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `SBI ${val.toString(16).toUpperCase()}H: A = A - TEMP - Borrow -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 0xE6: { // ANI
@@ -569,7 +726,18 @@ export class CPU8085 {
           this.flags.cy = false;
           this.flags.ac = true;
           this.updateSZP(this.A);
-          description = `ANI ${val.toString(16).toUpperCase()}H: A = A & 0x${val.toString(16).toUpperCase()} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'ANA',
+            name: 'ANI (AND Immediate)',
+            operatorSymbol: '&',
+            operandA: oldA,
+            operandB: val,
+            operandBName: `Immediate ${val.toString(16).toUpperCase()}H`,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'P', 'CY', 'AC'],
+            explanation: `ALU Bitwise AND: 0x${oldA.toString(16).toUpperCase()} & 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `ANI ${val.toString(16).toUpperCase()}H: A = A & TEMP -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 0xEE: { // XRI
@@ -577,7 +745,18 @@ export class CPU8085 {
           this.flags.cy = false;
           this.flags.ac = false;
           this.updateSZP(this.A);
-          description = `XRI ${val.toString(16).toUpperCase()}H: A = A ^ 0x${val.toString(16).toUpperCase()} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'XRA',
+            name: 'XRI (XOR Immediate)',
+            operatorSymbol: '^',
+            operandA: oldA,
+            operandB: val,
+            operandBName: `Immediate ${val.toString(16).toUpperCase()}H`,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'P', 'CY', 'AC'],
+            explanation: `ALU Bitwise XOR: 0x${oldA.toString(16).toUpperCase()} ^ 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `XRI ${val.toString(16).toUpperCase()}H: A = A ^ TEMP -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 0xF6: { // ORI
@@ -585,7 +764,18 @@ export class CPU8085 {
           this.flags.cy = false;
           this.flags.ac = false;
           this.updateSZP(this.A);
-          description = `ORI ${val.toString(16).toUpperCase()}H: A = A | 0x${val.toString(16).toUpperCase()} -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
+          aluOperation = {
+            type: 'ORA',
+            name: 'ORI (OR Immediate)',
+            operatorSymbol: '|',
+            operandA: oldA,
+            operandB: val,
+            operandBName: `Immediate ${val.toString(16).toUpperCase()}H`,
+            result: this.A,
+            flagsAffected: ['S', 'Z', 'P', 'CY', 'AC'],
+            explanation: `ALU Bitwise OR: 0x${oldA.toString(16).toUpperCase()} | 0x${val.toString(16).toUpperCase()} = 0x${this.A.toString(16).toUpperCase()}H`,
+          };
+          description = `ORI ${val.toString(16).toUpperCase()}H: A = A | TEMP -> 0x${this.A.toString(16).padStart(2, '0').toUpperCase()}`;
           break;
         }
         case 0xFE: { // CPI
@@ -593,7 +783,20 @@ export class CPU8085 {
           this.flags.ac = ((this.A & 0x0F) - (val & 0x0F)) < 0;
           this.flags.cy = diff < 0;
           this.updateSZP(diff & 0xFF);
-          description = `CPI ${val.toString(16).toUpperCase()}H: Compare A (0x${this.A.toString(16).toUpperCase()}) with 0x${val.toString(16).toUpperCase()} -> ${this.A === val ? 'EQUAL (Z=1)' : this.A < val ? 'LESS (CY=1)' : 'GREATER'}`;
+          const compResultStr = this.A === val ? 'EQUAL (Z=1, CY=0)' : this.A < val ? 'A < TEMP (CY=1, Z=0)' : 'A > TEMP (CY=0, Z=0)';
+          aluOperation = {
+            type: 'CMP',
+            name: 'CPI (Compare Immediate)',
+            operatorSymbol: 'VS',
+            operandA: this.A,
+            operandB: val,
+            operandBName: `Immediate ${val.toString(16).toUpperCase()}H`,
+            result: diff & 0xFF,
+            comparisonResult: compResultStr,
+            flagsAffected: ['S', 'Z', 'AC', 'P', 'CY'],
+            explanation: `CPI compares Accumulator (0x${this.A.toString(16).toUpperCase()}) with immediate byte (0x${val.toString(16).toUpperCase()}). Outcome: ${compResultStr}. Flags updated (CY=${this.flags.cy ? 1 : 0}, Z=${this.flags.z ? 1 : 0}). A remains unchanged.`,
+          };
+          description = `CPI ${val.toString(16).toUpperCase()}H: Compare A (0x${this.A.toString(16).toUpperCase()}) with TEMP (0x${val.toString(16).toUpperCase()}) -> ${compResultStr}`;
           break;
         }
       }
@@ -906,8 +1109,8 @@ export class CPU8085 {
     // R pointer: derived from DE register pair (or BC)
     const hlVal = this.getHL();
     const deVal = this.getDE();
-    const pointerL = hlVal >= 0x2000 && hlVal < 0xFFFF ? hlVal : undefined;
-    const pointerR = deVal >= 0x2000 && deVal < 0xFFFF ? deVal : undefined;
+    const pointerL = hlVal > 0 && hlVal <= 0xFFFF ? hlVal : undefined;
+    const pointerR = deVal > 0 && deVal <= 0xFFFF ? deVal : undefined;
 
     return {
       stepIndex,
@@ -920,6 +1123,7 @@ export class CPU8085 {
       flags: this.getFlags(),
       description,
       dataTransfer,
+      aluOperation,
       pointerL,
       pointerR,
       activeRegisters,

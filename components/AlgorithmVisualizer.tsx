@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { TraceStep } from '@/lib/8085/types';
+import { TraceStep, RegisterState } from '@/lib/8085/types';
 import { StepDescription } from './StepDescription';
 import { PlaybackControls } from './PlaybackControls';
 import { RegisterBank } from './RegisterBank';
@@ -98,9 +98,8 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({
     onStepChange(clamped);
   };
 
-  // Extract current registers or fallback to initial
-  const currentRegisters = activeStep?.registers || {
-    A: 0, B: 0, C: 0, D: 0, E: 0, H: 0, L: 0, PC: 0x2000, SP: 0xFFFF,
+  const currentRegisters: RegisterState = activeStep?.registers || {
+    A: 0, B: 0, C: 0, D: 0, E: 0, H: 0, L: 0, W: 0, Z: 0, TEMP: 0, PC: 0x2000, SP: 0xFFFF,
   };
 
   const currentFlags = activeStep?.flags || {
