@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowRight,
+  ArrowUpDown,
   Cpu,
   MemoryStick,
   Binary,
@@ -118,6 +119,313 @@ const FlagToggle: React.FC<FlagToggleProps> = ({ name, value, desc }) => (
     </motion.div>
   </div>
 );
+
+interface IncDecLatchState {
+  type: string;
+  action: 'INCREMENT' | 'DECREMENT' | 'LATCH';
+  deltaLabel: string;
+  targetName: string;
+  inputVal: number;
+  outputVal: number;
+  highByte: number;
+  lowByte: number;
+  badgeText: string;
+  badgeColor: string;
+  note: string;
+}
+
+function getIncDecLatchState(step: TraceStep): IncDecLatchState {
+  const instruction = step.instruction || '';
+  const parts = instruction.trim().split(/\s+/);
+  const mnemonic = (parts[0] || '').toUpperCase();
+  const operand = (parts[1] || '').toUpperCase().replace(/,/g, '');
+
+  // 1. INX rp (16-bit Increment)
+  if (mnemonic === 'INX') {
+    let target = 'Register Pair';
+    let outputVal = 0;
+    const rp = operand.charAt(0);
+    if (rp === 'B') {
+      target = 'Register Pair B-C';
+      outputVal = ((step.registers.B << 8) | step.registers.C) & 0xFFFF;
+    } else if (rp === 'D') {
+      target = 'Register Pair D-E';
+      outputVal = ((step.registers.D << 8) | step.registers.E) & 0xFFFF;
+    } else if (rp === 'H') {
+      target = 'Register Pair H-L';
+      outputVal = ((step.registers.H << 8) | step.registers.L) & 0xFFFF;
+    } else if (rp === 'S') {
+      target = 'Stack Pointer (SP)';
+      outputVal = step.registers.SP & 0xFFFF;
+    }
+    const inputVal = (outputVal - 1) & 0xFFFF;
+    return {
+      type: 'INX',
+      action: 'INCREMENT',
+      deltaLabel: '+1',
+      targetName: target,
+      inputVal,
+      outputVal,
+      highByte: (outputVal >> 8) & 0xFF,
+      lowByte: outputVal & 0xFF,
+      badgeText: `INX ${rp} (+1)`,
+      badgeColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+      note: 'Hardware Note: Executed via 16-bit Inc/Dec Latch without 8-bit ALU. Status Flags (Z, S, CY, AC, P) are NOT modified.',
+    };
+  }
+
+  // 2. DCX rp (16-bit Decrement)
+  if (mnemonic === 'DCX') {
+    let target = 'Register Pair';
+    let outputVal = 0;
+    const rp = operand.charAt(0);
+    if (rp === 'B') {
+      target = 'Register Pair B-C';
+      outputVal = ((step.registers.B << 8) | step.registers.C) & 0xFFFF;
+    } else if (rp === 'D') {
+      target = 'Register Pair D-E';
+      outputVal = ((step.registers.D << 8) | step.registers.E) & 0xFFFF;
+    } else if (rp === 'H') {
+      target = 'Register Pair H-L';
+      outputVal = ((step.registers.H << 8) | step.registers.L) & 0xFFFF;
+    } else if (rp === 'S') {
+      target = 'Stack Pointer (SP)';
+      outputVal = step.registers.SP & 0xFFFF;
+    }
+    const inputVal = (outputVal + 1) & 0xFFFF;
+    return {
+      type: 'DCX',
+      action: 'DECREMENT',
+      deltaLabel: '-1',
+      targetName: target,
+      inputVal,
+      outputVal,
+      highByte: (outputVal >> 8) & 0xFF,
+      lowByte: outputVal & 0xFF,
+      badgeText: `DCX ${rp} (-1)`,
+      badgeColor: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+      note: 'Hardware Note: Executed via 16-bit Inc/Dec Latch without 8-bit ALU. Condition flags remain completely unchanged.',
+    };
+  }
+
+  // 3. PUSH rp (SP decremented by 2)
+  if (mnemonic === 'PUSH') {
+    const outputVal = step.registers.SP & 0xFFFF;
+    const inputVal = (outputVal + 2) & 0xFFFF;
+    return {
+      type: 'PUSH',
+      action: 'DECREMENT',
+      deltaLabel: '-2',
+      targetName: 'Stack Pointer (SP)',
+      inputVal,
+      outputVal,
+      highByte: (outputVal >> 8) & 0xFF,
+      lowByte: outputVal & 0xFF,
+      badgeText: 'PUSH (-2)',
+      badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      note: 'Stack Push: Decrementer steps SP by 2 to allocate top-of-stack space before writing register pair.',
+    };
+  }
+
+  // 4. POP rp (SP incremented by 2)
+  if (mnemonic === 'POP') {
+    const outputVal = step.registers.SP & 0xFFFF;
+    const inputVal = (outputVal - 2) & 0xFFFF;
+    return {
+      type: 'POP',
+      action: 'INCREMENT',
+      deltaLabel: '+2',
+      targetName: 'Stack Pointer (SP)',
+      inputVal,
+      outputVal,
+      highByte: (outputVal >> 8) & 0xFF,
+      lowByte: outputVal & 0xFF,
+      badgeText: 'POP (+2)',
+      badgeColor: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
+      note: 'Stack Pop: Incrementer advances SP by 2 to reclaim stack memory after reading register pair.',
+    };
+  }
+
+  // 5. CALL / RST
+  if (mnemonic.startsWith('CALL') || mnemonic === 'RST' || ['CC', 'CNC', 'CZ', 'CNZ', 'CP', 'CM', 'CPE', 'CPO'].includes(mnemonic)) {
+    const outputVal = step.registers.PC & 0xFFFF;
+    const inputVal = step.address & 0xFFFF;
+    return {
+      type: 'CALL',
+      action: 'DECREMENT',
+      deltaLabel: 'SP-2 / PC',
+      targetName: 'SP & Program Counter',
+      inputVal,
+      outputVal,
+      highByte: (outputVal >> 8) & 0xFF,
+      lowByte: outputVal & 0xFF,
+      badgeText: 'CALL LATCH',
+      badgeColor: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+      note: 'Subroutine Call: SP decremented by 2 for return address, destination latched to PC.',
+    };
+  }
+
+  // 6. RET
+  if (mnemonic.startsWith('RET') || ['RC', 'RNC', 'RZ', 'RNZ', 'RP', 'RM', 'RPE', 'RPO'].includes(mnemonic)) {
+    const outputVal = step.registers.PC & 0xFFFF;
+    const inputVal = step.address & 0xFFFF;
+    return {
+      type: 'RET',
+      action: 'INCREMENT',
+      deltaLabel: 'SP+2 / PC',
+      targetName: 'SP & Program Counter',
+      inputVal,
+      outputVal,
+      highByte: (outputVal >> 8) & 0xFF,
+      lowByte: outputVal & 0xFF,
+      badgeText: 'RET LATCH',
+      badgeColor: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+      note: 'Return: SP incremented by 2, popped return address latched into Program Counter.',
+    };
+  }
+
+  // 7. JMP or branch
+  if (mnemonic.startsWith('J') || mnemonic === 'PCHL') {
+    const outputVal = step.registers.PC & 0xFFFF;
+    const inputVal = step.address & 0xFFFF;
+    const isJumped = outputVal !== ((inputVal + (step.bytes?.length || 1)) & 0xFFFF);
+    if (isJumped) {
+      return {
+        type: 'JMP',
+        action: 'LATCH',
+        deltaLabel: 'JUMP',
+        targetName: 'Program Counter (PC)',
+        inputVal,
+        outputVal,
+        highByte: (outputVal >> 8) & 0xFF,
+        lowByte: outputVal & 0xFF,
+        badgeText: 'PC BRANCH LATCH',
+        badgeColor: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+        note: `Branch taken: Target address 0x${toHex(outputVal, 4)}H latched into Program Counter.`,
+      };
+    }
+  }
+
+  // 8. Default: Instruction Fetch (PC advance)
+  const byteLen = step.bytes?.length || 1;
+  const inputVal = step.address & 0xFFFF;
+  const outputVal = (step.address + byteLen) & 0xFFFF;
+  return {
+    type: 'PC_FETCH',
+    action: 'INCREMENT',
+    deltaLabel: `+${byteLen}`,
+    targetName: 'Program Counter (PC)',
+    inputVal,
+    outputVal,
+    highByte: (outputVal >> 8) & 0xFF,
+    lowByte: outputVal & 0xFF,
+    badgeText: `FETCH PC (+${byteLen})`,
+    badgeColor: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
+    note: `Instruction Fetch: 16-bit address latch stepped PC by ${byteLen} byte${byteLen > 1 ? 's' : ''} to prepare next fetch cycle.`,
+  };
+}
+
+const IncDecLatchCard: React.FC<{ step: TraceStep }> = ({ step }) => {
+  const latch = getIncDecLatchState(step);
+  const isInc = latch.action === 'INCREMENT';
+  const isDec = latch.action === 'DECREMENT';
+
+  return (
+    <div className="p-3 bg-zinc-950/70 rounded-lg border border-zinc-800/80 flex flex-col gap-2.5">
+      {/* Title & Badge */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <ArrowUpDown className="w-3.5 h-3.5 text-amber-400" />
+          <span className="text-[11px] font-semibold text-zinc-300 uppercase tracking-wider">
+            16-Bit Incrementer / Decrementer Address Latch
+          </span>
+        </div>
+        <span
+          className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold border ${latch.badgeColor}`}
+        >
+          {latch.badgeText}
+        </span>
+      </div>
+
+      {/* 3-Stage Hardware Flow (Input Bus -> Inc/Dec Unit -> 16-bit Address Latch) */}
+      <div className="grid grid-cols-11 gap-1.5 items-center bg-zinc-900/60 p-2 rounded-lg border border-zinc-800">
+        {/* Stage 1: Input from Register Array */}
+        <div className="col-span-4 flex flex-col p-2 bg-zinc-950/80 rounded border border-zinc-800/90 text-center">
+          <span className="text-[9px] uppercase font-semibold text-zinc-400 truncate" title={latch.targetName}>
+            {latch.targetName}
+          </span>
+          <span className="font-mono text-xs font-bold text-zinc-200 mt-0.5">
+            0x{toHex(latch.inputVal, 4)}H
+          </span>
+          <span className="text-[8px] font-mono text-zinc-500 mt-0.5">16-Bit Input Bus</span>
+        </div>
+
+        {/* Stage 2: Dedicated 16-bit Inc/Dec Unit */}
+        <div className="col-span-3 flex flex-col items-center justify-center text-center">
+          <motion.div
+            key={`${step.stepIndex}-op`}
+            initial={{ scale: 0.85 }}
+            animate={{ scale: 1 }}
+            transition={springTransition}
+            className={`w-7 h-7 rounded-full border flex items-center justify-center font-mono font-bold text-xs shadow-sm ${
+              isInc
+                ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                : isDec
+                ? 'bg-rose-500/20 text-rose-400 border-rose-500/40'
+                : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+            }`}
+          >
+            {latch.deltaLabel}
+          </motion.div>
+          <span className="text-[8px] font-mono text-zinc-400 mt-1 uppercase font-semibold">
+            {isInc ? 'Inc Unit' : isDec ? 'Dec Unit' : 'Latch Unit'}
+          </span>
+        </div>
+
+        {/* Stage 3: Latched Output Address */}
+        <div className="col-span-4 flex flex-col p-2 bg-zinc-950/80 rounded border border-amber-500/30 text-center shadow-sm">
+          <span className="text-[9px] uppercase font-semibold text-amber-400">
+            Address Latch
+          </span>
+          <motion.span
+            key={`${step.stepIndex}-val`}
+            initial={{ scale: 0.95 }}
+            animate={{ scale: 1 }}
+            transition={springTransition}
+            className="font-mono text-xs font-black text-amber-300 mt-0.5"
+          >
+            0x{toHex(latch.outputVal, 4)}H
+          </motion.span>
+          <span className="text-[8px] font-mono text-amber-500/80 mt-0.5">Latched 16-Bit</span>
+        </div>
+      </div>
+
+      {/* External Bus Output Split (A15-A8 & AD7-AD0) */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="flex items-center justify-between px-2.5 py-1.5 bg-zinc-900/40 rounded border border-zinc-800/80 text-[11px] font-mono">
+          <div className="flex flex-col">
+            <span className="text-zinc-400 text-[10px] font-sans font-semibold">Address Buffer</span>
+            <span className="text-zinc-500 text-[9px]">Pins 19-28 (A15-A8)</span>
+          </div>
+          <span className="font-bold text-cyan-300">0x{toHex(latch.highByte, 2)}H</span>
+        </div>
+        <div className="flex items-center justify-between px-2.5 py-1.5 bg-zinc-900/40 rounded border border-zinc-800/80 text-[11px] font-mono">
+          <div className="flex flex-col">
+            <span className="text-zinc-400 text-[10px] font-sans font-semibold">Multiplexed Bus</span>
+            <span className="text-zinc-500 text-[9px]">Pins 12-19 (AD7-AD0)</span>
+          </div>
+          <span className="font-bold text-emerald-300">0x{toHex(latch.lowByte, 2)}H</span>
+        </div>
+      </div>
+
+      {/* Educational Hardware Note */}
+      <div className="flex items-start gap-1.5 text-[10px] text-zinc-400 bg-zinc-900/40 px-2 py-1.5 rounded border border-zinc-800/60 leading-tight">
+        <Zap className="w-3 h-3 text-amber-400 shrink-0 mt-0.5" />
+        <span>{latch.note}</span>
+      </div>
+    </div>
+  );
+};
 
 export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
   steps,
@@ -360,6 +668,9 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
               <FlagToggle name="CY" value={flags.cy} desc="Carry Flag: arithmetic carry or borrow" />
             </div>
           </div>
+
+          {/* 16-bit Incrementer / Decrementer Address Latch */}
+          <IncDecLatchCard step={step} />
         </div>
 
         {/* ─── Right Box: Registers & Internal Bus (7 cols) ─── */}

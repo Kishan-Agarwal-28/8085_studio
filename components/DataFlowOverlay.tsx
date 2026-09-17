@@ -95,7 +95,7 @@ export const DataFlowOverlay: React.FC<DataFlowOverlayProps> = ({
               initial={{ scale: 0.8, x: -15 }}
               animate={{ scale: 1.05, x: 0 }}
               transition={springTransition}
-              className="flex flex-col items-center justify-center rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 text-zinc-950 font-black shadow-lg shadow-amber-500/20"
+              className="flex flex-col items-center justify-center rounded-xl bg-linear-to-r from-amber-500 to-orange-500 px-4 py-2 text-zinc-950 font-black shadow-lg shadow-amber-500/20"
             >
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-mono tracking-wide">{hexVal}</span>

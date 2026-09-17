@@ -1,6 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+} from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { PRESET_PROGRAMS, PresetProgram } from '@/lib/8085/presets';
@@ -41,7 +48,7 @@ const CpuVisualizer = dynamic(
   { ssr: false, loading: () => <div className="flex-1 bg-zinc-950 animate-pulse rounded-lg" /> }
 );
 
-export default function Home() {
+function SimulatorApp() {
   const [selectedPresetId, setSelectedPresetId] = useState(PRESET_PROGRAMS[0].id);
   const [code, setCode] = useState(PRESET_PROGRAMS[0].code);
   const [compileResult, setCompileResult] = useState<CompileResult | null>(() =>
@@ -64,7 +71,6 @@ export default function Home() {
 
   // File System & OPFS states with LocalStorage persistence
   const [isExplorerOpen, setIsExplorerOpen] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true;
     try {
       const saved = localStorage.getItem('8085_explorer_open');
       if (saved !== null) return saved === 'true';
@@ -72,7 +78,6 @@ export default function Home() {
     return true;
   });
   const [explorerWidth, setExplorerWidth] = useState<number>(() => {
-    if (typeof window === 'undefined') return 230;
     try {
       const saved = localStorage.getItem('8085_explorer_width');
       if (saved) {
@@ -83,7 +88,6 @@ export default function Home() {
     return 230;
   });
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(() => {
-    if (typeof window === 'undefined') return '/my_programs/main.asm';
     try {
       const saved = localStorage.getItem('8085_current_file');
       if (saved) return saved;
@@ -96,7 +100,6 @@ export default function Home() {
 
   // Resizing States with LocalStorage Persistence
   const [editorWidth, setEditorWidth] = useState<number>(() => {
-    if (typeof window === 'undefined') return 45;
     try {
       const saved = localStorage.getItem('8085_editor_width');
       if (saved) {
@@ -107,7 +110,6 @@ export default function Home() {
     return 45;
   });
   const [hexHeight, setHexHeight] = useState<number>(() => {
-    if (typeof window === 'undefined') return 140;
     try {
       const saved = localStorage.getItem('8085_hex_height');
       if (saved) {
@@ -285,7 +287,7 @@ export default function Home() {
   };
 
   // Code change with 10s debounced auto-save
-  const handleCodeChange = (newCode: string) => {
+  const handleCodeChange = useCallback((newCode: string) => {
     setCode(newCode);
     setHasUnsavedChanges(true);
 
@@ -300,7 +302,7 @@ export default function Home() {
         }
       }
     }, 10000); // 10s debounce auto-save
-  };
+  }, [currentFilePath]);
 
   // Manual save (Ctrl+S or Save Button)
   const handleSaveFile = useCallback(async () => {
@@ -411,77 +413,12 @@ export default function Home() {
   const handleReset = useCallback(() => {
     setIsPlaying(false);
     setCurrentStep(0);
+    toast.add({
+      title: 'Program Reset',
+      description: 'Simulator reset to Step 0',
+      type: 'info',
+    });
   }, []);
-
-  // Global keyboard shortcuts (Ctrl+S, Space, Arrows, R)
-  useEffect(() => {
-    const handle = (e: KeyboardEvent) => {
-      // Save file shortcut Ctrl+S / Cmd+S (always active, even in Monaco)
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        handleSaveFile();
-        return;
-      }
-
-      const target = e.target as HTMLElement | null;
-      if (
-        target?.tagName === 'INPUT' ||
-        target?.tagName === 'TEXTAREA' ||
-        target?.isContentEditable ||
-        target?.closest?.('.monaco-editor') ||
-        document.activeElement?.closest?.('.monaco-editor')
-      ) {
-        return;
-      }
-
-      if (e.code === 'Space') {
-        e.preventDefault();
-        handleTogglePlay();
-      } else if (e.code === 'ArrowRight') {
-        e.preventDefault();
-        handleNextStep();
-      } else if (e.code === 'ArrowLeft') {
-        e.preventDefault();
-        handlePrevStep();
-      } else if (e.key.toLowerCase() === 'r') {
-        e.preventDefault();
-        handleReset();
-      }
-    };
-    window.addEventListener('keydown', handle);
-    return () => window.removeEventListener('keydown', handle);
-  }, [handleSaveFile, handleTogglePlay, handleNextStep, handlePrevStep, handleReset]);
-
-  const handleSelectPreset = (id: string) => {
-    const preset = PRESET_PROGRAMS.find((p) => p.id === id);
-    if (!preset) return;
-    setSelectedPresetId(id);
-    setCode(preset.code);
-    setUserMemoryEdits({});
-    setIsPlaying(false);
-
-    // Update active file reference
-    const presetPath = `/examples/${preset.id.replace(/-/g, '_')}.asm`;
-    setCurrentFilePath(presetPath);
-    setHasUnsavedChanges(false);
-    try {
-      localStorage.setItem('8085_current_file', presetPath);
-    } catch {}
-
-    const comp = WorkerClient.compile(preset.code);
-    setCompileResult(comp);
-    if (comp.success) {
-      const sim = WorkerClient.simulate(comp, preset.initialMemory);
-      setSimulationResult(sim);
-      setCurrentStep(0);
-      setMemBaseAddress(preset.initialMemory?.[0]?.address ?? 0x2050);
-    } else {
-      setSimulationResult(null);
-      setCurrentStep(0);
-      setMemBaseAddress(preset.initialMemory?.[0]?.address ?? 0x2050);
-    }
-    toast.add({ title: `Loaded "${preset.name}"`, description: preset.description, type: 'info' });
-  };
 
   // STEP 1: Compile
   const handleCompile = useCallback(() => {
@@ -561,6 +498,13 @@ export default function Home() {
     }
     setMemBaseAddress(targetMem & ~0x0F);
 
+    // Release focus from Monaco editor so keyboard controls (Space, Arrows, R) immediately work
+    if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+      if (document.activeElement.closest('.monaco-editor') || document.activeElement.tagName === 'TEXTAREA') {
+        document.activeElement.blur();
+      }
+    }
+
     if (sim.success && sim.steps.length > 0) {
       toast.add({
         title: 'Simulation Ready',
@@ -575,6 +519,98 @@ export default function Home() {
       });
     }
   }, [code, currentPreset.initialMemory, userMemoryEdits]);
+
+  // Global keyboard shortcuts (F9 / Ctrl+Enter, Ctrl+S, Space, Arrows, R)
+  useEffect(() => {
+    const handle = (e: KeyboardEvent) => {
+      // 1. Run / Simulate: F9 or Ctrl+Enter / Cmd+Enter (always active everywhere, including inside editor)
+      if (
+        e.code === 'F9' ||
+        e.key === 'F9' ||
+        ((e.ctrlKey || e.metaKey) && (e.key === 'Enter' || e.code === 'Enter'))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleRun();
+        return;
+      }
+
+      // 2. Save file: Ctrl+S / Cmd+S (always active everywhere)
+      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 's' || e.code === 'KeyS')) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleSaveFile();
+        return;
+      }
+
+      // Check if user is typing text inside an input, textarea, or Monaco editor
+      const target = e.target as HTMLElement | null;
+      const isTyping =
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable ||
+        Boolean(target?.closest?.('.monaco-editor')) ||
+        (target?.tagName === 'INPUT' && !['range', 'button', 'checkbox', 'radio'].includes((target as HTMLInputElement).type?.toLowerCase()));
+
+      if (isTyping) {
+        return;
+      }
+
+      // 4. Play / Pause Execution: Space
+      if (e.code === 'Space') {
+        e.preventDefault();
+        handleTogglePlay();
+      }
+      // 5. Step Forward: ArrowRight
+      else if (e.code === 'ArrowRight') {
+        e.preventDefault();
+        handleNextStep();
+      }
+      // 6. Step Backward: ArrowLeft
+      else if (e.code === 'ArrowLeft') {
+        e.preventDefault();
+        handlePrevStep();
+      }
+      // 7. Reset Program: R
+      else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key.toLowerCase() === 'r' || e.code === 'KeyR')) {
+        e.preventDefault();
+        handleReset();
+      }
+    };
+    window.addEventListener('keydown', handle, true);
+    return () => window.removeEventListener('keydown', handle, true);
+  }, [handleRun, handleSaveFile, handleTogglePlay, handleNextStep, handlePrevStep, handleReset]);
+
+  const handleSelectPreset = (id: string) => {
+    const preset = PRESET_PROGRAMS.find((p) => p.id === id);
+    if (!preset) return;
+    setSelectedPresetId(id);
+    setCode(preset.code);
+    setUserMemoryEdits({});
+    setIsPlaying(false);
+
+    // Update active file reference
+    const presetPath = `/examples/${preset.id.replace(/-/g, '_')}.asm`;
+    setCurrentFilePath(presetPath);
+    setHasUnsavedChanges(false);
+    try {
+      localStorage.setItem('8085_current_file', presetPath);
+    } catch {}
+
+    const comp = WorkerClient.compile(preset.code);
+    setCompileResult(comp);
+    if (comp.success) {
+      const sim = WorkerClient.simulate(comp, preset.initialMemory);
+      setSimulationResult(sim);
+      setCurrentStep(0);
+      setMemBaseAddress(preset.initialMemory?.[0]?.address ?? 0x2050);
+    } else {
+      setSimulationResult(null);
+      setCurrentStep(0);
+      setMemBaseAddress(preset.initialMemory?.[0]?.address ?? 0x2050);
+    }
+    toast.add({ title: `Loaded "${preset.name}"`, description: preset.description, type: 'info' });
+  };
+
 
   // Download Machine Code Hex Dump as .txt file (Replaced WASM download)
   const handleDownloadHex = useCallback(() => {
@@ -708,6 +744,7 @@ export default function Home() {
           <button
             onClick={handleRun}
             className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 text-xs font-semibold shadow-sm transition-colors active:scale-[0.97]"
+            title="Run / Simulate (F9 or Ctrl+Enter)"
           >
             <Play className="h-3.5 w-3.5 fill-current" />
             Run
@@ -840,6 +877,8 @@ export default function Home() {
               onChange={handleCodeChange}
               diagnostics={compileResult?.diagnostics ?? []}
               activeLine={activeLine}
+              onRun={handleRun}
+              onSave={handleSaveFile}
             />
           </div>
 
@@ -891,7 +930,7 @@ export default function Home() {
               onClick={handleReset}
               disabled={totalSteps === 0}
               className="p-1.5 rounded-md hover:bg-accent disabled:opacity-40 transition-colors"
-              title="Reset to start (R)"
+              title="Reset Program (R)"
             >
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
@@ -952,7 +991,7 @@ export default function Home() {
 
             {/* Speed Multiplier Pill Buttons */}
             <div className="flex items-center border border-border rounded-md overflow-hidden ml-1">
-              {[0.5, 1, 2, 4].map((s) => (
+              {[0.25,0.5, 1,1.5, 2, 4].map((s) => (
                 <button
                   key={s}
                   onClick={() => setSpeed(s)}
@@ -995,4 +1034,84 @@ export default function Home() {
       </div>
     </div>
   );
+}
+
+const emptySubscribe = () => () => {};
+
+function useIsMounted() {
+  return useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
+}
+
+function SimulatorSkeleton() {
+  return (
+    <div className="flex flex-col h-screen bg-background text-foreground overflow-hidden font-sans select-none">
+      {/* Top Navigation Bar */}
+      <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-card shrink-0 gap-4">
+        {/* Brand */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 font-bold text-base tracking-tight text-foreground">
+            <Cpu className="h-5 w-5 text-cyan-400" />
+            <span className="bg-linear-to-r from-cyan-400 via-teal-300 to-emerald-400 bg-clip-text text-transparent">
+              8085 Microprocessor Simulator
+            </span>
+          </div>
+          <span className="rounded bg-cyan-950/80 px-2 py-0.5 font-mono text-[10px] text-cyan-400 font-semibold border border-cyan-800/50 hidden sm:inline">
+            v2.0 Turbo
+          </span>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2">
+          <Link
+            href="/"
+            className="hidden md:inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent text-muted-foreground transition-colors"
+            title="Landing Page"
+          >
+            <HomeIcon className="h-3.5 w-3.5" />
+            Home
+          </Link>
+          <Link
+            href="/instructions"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent text-muted-foreground transition-colors"
+            title="View Usage Instructions & ISA Reference"
+          >
+            <BookOpen className="h-3.5 w-3.5 text-cyan-400" />
+            <span className="hidden sm:inline">Guide</span>
+          </Link>
+          <div className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground/60">
+            <Hammer className="h-3.5 w-3.5" />
+            Compile
+          </div>
+          <div className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600/70 text-white px-3.5 py-1.5 text-xs font-semibold">
+            <Play className="h-3.5 w-3.5 fill-current" />
+            Run
+          </div>
+        </div>
+      </header>
+
+      {/* Main Workspace Skeleton */}
+      <div className="flex-1 flex min-h-0 relative bg-zinc-950">
+        <div className="flex-1 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3 text-zinc-400">
+            <Cpu className="w-8 h-8 text-cyan-400 animate-pulse" />
+            <span className="text-xs font-mono text-zinc-400">Initializing 8085 Environment...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function SimulatorPage() {
+  const isMounted = useIsMounted();
+
+  if (!isMounted) {
+    return <SimulatorSkeleton />;
+  }
+
+  return <SimulatorApp />;
 }

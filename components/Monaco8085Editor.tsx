@@ -9,6 +9,8 @@ interface Monaco8085EditorProps {
   onChange: (val: string) => void;
   diagnostics: CompileDiagnostic[];
   activeLine?: number;
+  onRun?: () => void;
+  onSave?: () => void;
 }
 
 export const Monaco8085Editor: React.FC<Monaco8085EditorProps> = ({
@@ -16,12 +18,21 @@ export const Monaco8085Editor: React.FC<Monaco8085EditorProps> = ({
   onChange,
   diagnostics,
   activeLine,
+  onRun,
+  onSave,
 }) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<Monaco | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const decorationsRef = useRef<any>([]);
+
+  const onRunRef = useRef(onRun);
+  const onSaveRef = useRef(onSave);
+  useEffect(() => {
+    onRunRef.current = onRun;
+    onSaveRef.current = onSave;
+  }, [onRun, onSave]);
 
   // Setup Monaco syntax highlighting for 8085 assembly
   const handleEditorWillMount = (monaco: Monaco) => {
@@ -105,6 +116,21 @@ export const Monaco8085Editor: React.FC<Monaco8085EditorProps> = ({
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+
+    // Run / Simulate: Ctrl+Enter or Cmd+Enter
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+      onRunRef.current?.();
+    });
+
+    // Run / Simulate: F9
+    editor.addCommand(monaco.KeyCode.F9, () => {
+      onRunRef.current?.();
+    });
+
+    // Save File: Ctrl+S or Cmd+S
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      onSaveRef.current?.();
+    });
   };
 
   // Update diagnostic markers on Monaco model

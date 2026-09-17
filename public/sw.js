@@ -33,7 +33,10 @@ self.addEventListener('activate', (event) => {
 
 // Intercept fetch requests for caching offline assets
 self.addEventListener('fetch', (event) => {
-  // Pass-through or cache-first for static assets
+  // Only handle GET requests for same-origin static assets
+  if (event.request.method !== 'GET') return;
+  if (!event.request.url.startsWith(self.location.origin)) return;
+
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       return cachedResponse || fetch(event.request).catch(() => cachedResponse);
