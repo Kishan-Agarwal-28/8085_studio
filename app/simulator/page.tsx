@@ -29,6 +29,9 @@ import {
   Save,
   Home as HomeIcon,
   BookOpen,
+  Maximize2,
+  Minimize2,
+  Presentation,
 } from 'lucide-react';
 import { FileExplorer } from '@/components/FileExplorer';
 import {
@@ -46,6 +49,11 @@ const Monaco8085Editor = dynamic(
 const CpuVisualizer = dynamic(
   () => import('@/components/CpuVisualizer').then((m) => m.CpuVisualizer),
   { ssr: false, loading: () => <div className="flex-1 bg-zinc-950 animate-pulse rounded-lg" /> }
+);
+
+const PresenterCanvas = dynamic(
+  () => import('@/components/PresenterCanvas').then((m) => m.PresenterCanvas),
+  { ssr: false }
 );
 
 function SimulatorApp() {
@@ -120,6 +128,63 @@ function SimulatorApp() {
     return 140;
   });
 
+  // Full-Width Visualizer & Presenter Mode States
+  const [isVisualizerFullWidth, setIsVisualizerFullWidth] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('8085_visualizer_fullwidth');
+      if (saved !== null) return saved === 'true';
+    } catch {}
+    return false;
+  });
+  const [isPresenterMode, setIsPresenterMode] = useState<boolean>(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  const handleToggleVisualizerFullWidth = useCallback(() => {
+    setIsVisualizerFullWidth((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('8085_visualizer_fullwidth', String(next));
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  // Sync fullscreen change with document
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
+  const handleToggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+
+  const handleEnterPresenterMode = useCallback(() => {
+    setIsPresenterMode(true);
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+    toast.add({
+      title: 'Presenter Mode Active',
+      description: 'Entered fullscreen. Use the floating dock for Laser, Draw Canvas, and Click Pass-Through.',
+      type: 'info',
+    });
+  }, []);
+
+  const handleExitPresenterMode = useCallback(() => {
+    setIsPresenterMode(false);
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const isDraggingHoriz = useRef(false);
@@ -155,26 +220,37 @@ function SimulatorApp() {
   }, []);
 
   // Horizontal Drag Handler (Code Editor vs Visualizer split)
-  const handleHorizMouseDown = (e: React.MouseEvent) => {
+  const handleHorizPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
+    const handleEl = e.currentTarget;
+    try {
+      handleEl.setPointerCapture(e.pointerId);
+    } catch {}
     isDraggingHoriz.current = true;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
-    const onMouseMove = (moveEvent: MouseEvent) => {
+    const onPointerMove = (moveEvent: PointerEvent) => {
       if (!isDraggingHoriz.current || !workspaceRef.current) return;
       const rect = workspaceRef.current.getBoundingClientRect();
-      const offsetX = moveEvent.clientX - rect.left;
-      const pct = Math.max(20, Math.min(80, (offsetX / rect.width) * 100));
+      const explorerOffset = (!isVisualizerFullWidth && isExplorerOpen) ? (explorerWidth + 6) : 0;
+      const availableWidth = Math.max(100, rect.width - explorerOffset);
+      const currentEditorPx = moveEvent.clientX - (rect.left + explorerOffset);
+      const pct = Math.max(15, Math.min(85, (currentEditorPx / availableWidth) * 100));
       setEditorWidth(pct);
     };
 
-    const onMouseUp = () => {
+    const onPointerUp = (upEvent: PointerEvent) => {
       isDraggingHoriz.current = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+      try {
+        handleEl.releasePointerCapture(upEvent.pointerId);
+      } catch {}
+      window.removeEventListener('pointermove', onPointerMove, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerUp, true);
       setEditorWidth((curr) => {
         try {
           localStorage.setItem('8085_editor_width', curr.toFixed(1));
@@ -183,32 +259,43 @@ function SimulatorApp() {
       });
     };
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('pointermove', onPointerMove, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerUp, true);
   };
 
   // Vertical Drag Handler (Editor vs Hex panel split)
-  const handleVertMouseDown = (e: React.MouseEvent) => {
+  const handleVertPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
+    const handleEl = e.currentTarget;
+    try {
+      handleEl.setPointerCapture(e.pointerId);
+    } catch {}
     isDraggingVert.current = true;
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
     const startY = e.clientY;
     const startHeight = hexHeight;
 
-    const onMouseMove = (moveEvent: MouseEvent) => {
+    const onPointerMove = (moveEvent: PointerEvent) => {
       if (!isDraggingVert.current) return;
-      const delta = startY - moveEvent.clientY; // dragging up increases hex height
-      const newH = Math.max(50, Math.min(450, startHeight + delta));
+      // dragging up (smaller clientY) increases hex height
+      const delta = startY - moveEvent.clientY;
+      const newH = Math.max(40, Math.min(650, startHeight + delta));
       setHexHeight(newH);
     };
 
-    const onMouseUp = () => {
+    const onPointerUp = (upEvent: PointerEvent) => {
       isDraggingVert.current = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+      try {
+        handleEl.releasePointerCapture(upEvent.pointerId);
+      } catch {}
+      window.removeEventListener('pointermove', onPointerMove, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerUp, true);
       setHexHeight((curr) => {
         try {
           localStorage.setItem('8085_hex_height', curr.toString());
@@ -217,8 +304,9 @@ function SimulatorApp() {
       });
     };
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('pointermove', onPointerMove, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerUp, true);
   };
 
   // Playback timer
@@ -244,13 +332,18 @@ function SimulatorApp() {
   }, [isPlaying, speed, simulationResult]);
 
   // Explorer Drag Handler (Resizing File Explorer width)
-  const handleExplorerMouseDown = (e: React.MouseEvent) => {
+  const handleExplorerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    e.stopPropagation();
+    const handleEl = e.currentTarget;
+    try {
+      handleEl.setPointerCapture(e.pointerId);
+    } catch {}
     isDraggingExplorer.current = true;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
-    const onMouseMove = (moveEvent: MouseEvent) => {
+    const onPointerMove = (moveEvent: PointerEvent) => {
       if (!isDraggingExplorer.current || !workspaceRef.current) return;
       const rect = workspaceRef.current.getBoundingClientRect();
       const offsetX = moveEvent.clientX - rect.left;
@@ -258,12 +351,16 @@ function SimulatorApp() {
       setExplorerWidth(clamped);
     };
 
-    const onMouseUp = () => {
+    const onPointerUp = (upEvent: PointerEvent) => {
       isDraggingExplorer.current = false;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
+      try {
+        handleEl.releasePointerCapture(upEvent.pointerId);
+      } catch {}
+      window.removeEventListener('pointermove', onPointerMove, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerUp, true);
       setExplorerWidth((curr) => {
         try {
           localStorage.setItem('8085_explorer_width', curr.toString());
@@ -272,8 +369,9 @@ function SimulatorApp() {
       });
     };
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    window.addEventListener('pointermove', onPointerMove, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerUp, true);
   };
 
   const handleToggleExplorer = () => {
@@ -632,10 +730,20 @@ function SimulatorApp() {
         e.preventDefault();
         handleReset();
       }
+      // 8. Presenter Mode: P (when not typing)
+      else if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key.toLowerCase() === 'p' || e.code === 'KeyP') && !isPresenterMode) {
+        e.preventDefault();
+        handleEnterPresenterMode();
+      }
+      // 9. Full Width Visualizer: Alt+V
+      else if (e.altKey && (e.key.toLowerCase() === 'v' || e.code === 'KeyV')) {
+        e.preventDefault();
+        handleToggleVisualizerFullWidth();
+      }
     };
     window.addEventListener('keydown', handle, true);
     return () => window.removeEventListener('keydown', handle, true);
-  }, [handleRun, handleSaveFile, handleTogglePlay, handleNextStep, handlePrevStep, handleReset]);
+  }, [handleRun, handleSaveFile, handleTogglePlay, handleNextStep, handlePrevStep, handleReset, handleEnterPresenterMode, handleToggleVisualizerFullWidth, isPresenterMode]);
 
   const handleSelectPreset = (id: string) => {
     const preset = PRESET_PROGRAMS.find((p) => p.id === id);
@@ -793,6 +901,37 @@ function SimulatorApp() {
             <span className="hidden sm:inline">Guide</span>
           </Link>
           <button
+            type="button"
+            onClick={handleToggleVisualizerFullWidth}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+              isVisualizerFullWidth
+                ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                : 'border-border bg-card hover:bg-accent text-muted-foreground'
+            }`}
+            title={isVisualizerFullWidth ? 'Restore Split View (Alt+V)' : 'Full Width Visualizer (Alt+V)'}
+          >
+            {isVisualizerFullWidth ? (
+              <>
+                <Minimize2 className="h-3.5 w-3.5 text-cyan-400" />
+                <span className="hidden sm:inline">Split View</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="h-3.5 w-3.5 text-cyan-400" />
+                <span className="hidden sm:inline">Full Width</span>
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={handleEnterPresenterMode}
+            className="inline-flex items-center gap-1.5 rounded-md border border-violet-500/40 bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 px-2.5 py-1.5 text-xs font-medium transition-colors shadow-sm"
+            title="Enter Presenter Mode (F11 Fullscreen + Laser + Canvas Annotation)"
+          >
+            <Presentation className="h-3.5 w-3.5 text-violet-400" />
+            <span className="hidden sm:inline">Presenter</span>
+          </button>
+          <button
             type='button'
             onClick={handleCompile}
             className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors active:scale-[0.97]"
@@ -842,7 +981,7 @@ function SimulatorApp() {
       {/* ─── Main Workspace (Resizable Split View) ─── */}
       <div ref={workspaceRef} className="flex-1 flex min-h-0 relative">
         {/* Leftmost: File Explorer (Collapsible & Resizable) */}
-        {isExplorerOpen && (
+        {!isVisualizerFullWidth && isExplorerOpen && (
           <>
             <div
               style={{ width: `${explorerWidth}px` }}
@@ -858,8 +997,8 @@ function SimulatorApp() {
             </div>
             {/* Explorer Resizer Handle */}
             <div
-              onMouseDown={handleExplorerMouseDown}
-              className="w-1.5 hover:w-2 bg-border hover:bg-cyan-500/70 cursor-col-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-20"
+              onPointerDown={handleExplorerPointerDown}
+              className="w-1.5 hover:w-2 bg-border hover:bg-cyan-500/70 cursor-col-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-20 touch-none before:absolute before:-left-1.5 before:-right-1.5 before:top-0 before:bottom-0 before:content-['']"
               title="Drag to resize File Explorer"
             >
               <div className="h-10 w-0.5 bg-muted-foreground/40 group-hover:bg-cyan-200 rounded-full" />
@@ -868,10 +1007,11 @@ function SimulatorApp() {
         )}
 
         {/* Left Panel: Code Editor + Hex Dump (Resizable Width) */}
-        <div
-          style={{ width: `${editorWidth}%` }}
-          className="min-w-70 max-w-[80%] flex flex-col h-full overflow-hidden flex-1"
-        >
+        {!isVisualizerFullWidth && (
+          <div
+            style={{ width: `${editorWidth}%` }}
+            className="min-w-60 max-w-[85%] flex flex-col h-full overflow-hidden shrink-0"
+          >
           {/* Editor toolbar */}
           <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-card text-xs text-muted-foreground shrink-0 gap-2">
             <div className="flex items-center gap-2 min-w-0">
@@ -946,8 +1086,8 @@ function SimulatorApp() {
           {/* Vertical Resizer Handle between Editor and Hex Dump */}
           {compileResult?.hexDump && (
             <div
-              onMouseDown={handleVertMouseDown}
-              className="h-1.5 hover:h-2 bg-border hover:bg-cyan-500/70 cursor-row-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-10"
+              onPointerDown={handleVertPointerDown}
+              className="h-2 hover:h-2.5 bg-border hover:bg-cyan-500/70 cursor-row-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-20 touch-none before:absolute before:-top-2 before:-bottom-2 before:left-0 before:right-0 before:content-['']"
               title="Drag up/down to resize Hex Dump"
             >
               <div className="w-10 h-0.5 bg-muted-foreground/40 group-hover:bg-cyan-200 rounded-full" />
@@ -970,20 +1110,23 @@ function SimulatorApp() {
             </div>
           )}
         </div>
+        )}
 
         {/* Horizontal Resizer Handle between Left and Right Panels */}
-        <div
-          onMouseDown={handleHorizMouseDown}
-          className="w-1.5 hover:w-2 bg-border hover:bg-cyan-500/70 cursor-col-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-20"
-          title="Drag left/right to resize Editor & Visualizer"
-        >
-          <div className="h-10 w-0.5 bg-muted-foreground/40 group-hover:bg-cyan-200 rounded-full" />
-        </div>
+        {!isVisualizerFullWidth && (
+          <div
+            onPointerDown={handleHorizPointerDown}
+            className="w-1.5 hover:w-2 bg-border hover:bg-cyan-500/70 cursor-col-resize transition-all shrink-0 select-none group flex items-center justify-center relative z-20 touch-none before:absolute before:-left-1.5 before:-right-1.5 before:top-0 before:bottom-0 before:content-['']"
+            title="Drag left/right to resize Editor & Visualizer"
+          >
+            <div className="h-10 w-0.5 bg-muted-foreground/40 group-hover:bg-cyan-200 rounded-full" />
+          </div>
+        )}
 
         {/* Right Panel: Visualization & Playback Controls */}
         <div
-          style={{ width: `${100 - editorWidth}%` }}
-          className="min-w-[320px] flex flex-col h-full overflow-hidden"
+          style={{ width: isVisualizerFullWidth ? '100%' : `${100 - editorWidth}%` }}
+          className="min-w-[320px] flex flex-col h-full overflow-hidden flex-1"
         >
           {/* Playback Control Bar */}
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
@@ -1068,6 +1211,30 @@ function SimulatorApp() {
                 </button>
               ))}
             </div>
+
+            {/* Full Width Visualizer Button */}
+            <button
+              type="button"
+              onClick={handleToggleVisualizerFullWidth}
+              className={`p-1.5 rounded-md border transition-colors ml-1 ${
+                isVisualizerFullWidth
+                  ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
+                  : 'border-border bg-card hover:bg-accent text-muted-foreground'
+              }`}
+              title={isVisualizerFullWidth ? 'Restore Split View (Alt+V)' : 'Expand Visualizer Full Width (Alt+V)'}
+            >
+              {isVisualizerFullWidth ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            </button>
+
+            {/* Presenter Mode Button */}
+            <button
+              type="button"
+              onClick={handleEnterPresenterMode}
+              className="p-1.5 rounded-md border border-violet-500/40 bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 transition-colors ml-0.5"
+              title="Enter Presenter Mode (F11 Fullscreen + Laser + Canvas)"
+            >
+              <Presentation className="h-3.5 w-3.5 text-violet-400" />
+            </button>
           </div>
 
           {/* CPU & Memory Architecture Visualizer */}
@@ -1097,6 +1264,14 @@ function SimulatorApp() {
           </div>
         </div>
       </div>
+
+      {/* ─── Presenter Mode Transparent Canvas & Laser Overlay ─── */}
+      <PresenterCanvas
+        isOpen={isPresenterMode}
+        onClose={handleExitPresenterMode}
+        isFullscreen={isFullscreen}
+        onToggleFullscreen={handleToggleFullscreen}
+      />
     </div>
   );
 }
