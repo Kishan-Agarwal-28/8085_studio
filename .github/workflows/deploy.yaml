@@ -26,7 +26,6 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 10
           run_install: false
 
       - name: Setup Node.js
@@ -56,8 +55,7 @@ jobs:
           pnpm --package=netlify-cli@latest dlx netlify deploy \
             --prod \
             --no-build \
-            --dir=dist/client \
-            --functions=.netlify/v1/functions \
+            --dir=out \
             --site "$NETLIFY_SITE_ID" \
             --auth "$NETLIFY_AUTH_TOKEN" \
             --message "Deployed via GitHub Actions"
