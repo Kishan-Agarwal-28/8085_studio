@@ -56,6 +56,33 @@
 - Organize your microcode programs with folders and files stored locally in browser storage.
 - 10-second debounced auto-save ensures code changes are never lost.
 
+### 6. Hardware Interrupt Controller & SIM/RIM Decoder
+- **Physical Interrupt Pin Simulation**: Emulates all 5 physical 8085 interrupt lines with true hardware priority ranking:
+  - **`TRAP`** (Pin 6, Priority 1): Non-maskable interrupt (NMI), edge + level sensitive, automatically vectors to `0024H`.
+  - **`RST 7.5`** (Pin 7, Priority 2): Maskable, rising-edge triggered with internal hardware latch flip-flop, vectors to `003CH`.
+  - **`RST 6.5`** (Pin 8, Priority 3): Maskable, high-level sensitive, vectors to `0034H`.
+  - **`RST 5.5`** (Pin 9, Priority 4): Maskable, high-level sensitive, vectors to `002CH`.
+  - **`INTR`** (Pin 10, Priority 5): General maskable interrupt requiring an external `INTA` acknowledge cycle (vectors to `0038H` / `RST 7`).
+- **Interactive "⚡ Fire" Trigger Buttons**: Inject asynchronous hardware interrupt signals on demand during execution or when the CPU halts in an `EI` wait loop.
+- **Dynamic SIM & RIM Bitfield Decoders**: Visual $D_7 \to D_0$ bit decomposition cards showing register masks and serial I/O states in real time:
+  - **`SIM` (Set Interrupt Mask)**: Serial Output Data (`SOD`), Serial Data Enable (`SOE`), Reset RST 7.5 (`R7.5`), Mask Set Enable (`MSE`), and mask bits (`M7.5`, `M6.5`, `M5.5`).
+  - **`RIM` (Read Interrupt Mask)**: Serial Input Data (`SID`), pending interrupt latches (`I7.5`, `I6.5`, `I5.5`), Interrupt Enable flip-flop (`IE`), and active mask bits.
+- **16-Bit Incrementer / Decrementer Address Latch**: Dedicated visualization tracking address manipulation (`INX`, `DCX`, `PUSH`, `POP`) stepping through the 16-bit latch independently of the 8-bit ALU without modifying CPU condition flags.
+
+### 7. Presenter Mode & Full-Width Visualizer
+- **Full-Width Visualizer (`Alt + V`)**: Instantly collapse the code editor and file navigation tree to expand the CPU visualizer to 100% viewport width—ideal for classroom projections, technical demos, and wide screens.
+- **Interactive Presenter Canvas Overlay (`tldraw`)**: A fully transparent, non-intrusive drawing layer powered by `tldraw` rendered directly over the live simulator:
+  - Draw freehand sketches, boxes, arrows, highlighter markings, and text labels directly on top of the CPU architecture, memory grid, and bus animation.
+  - Dark-mode optimized palette with high-contrast presentation colors.
+- **Click Pass-Through Toggle (<kbd>T</kbd>)**: One-key toggle between **Draw Mode** (annotate on canvas) and **Pass to App** (canvas becomes click-through, allowing live stepping, memory editing, register updates, and code execution underneath without hiding annotations).
+- **Glowing Neon Laser Pointer (<kbd>L</kbd>)**: Pulsing neon pointer with radial aura and interactive click shockwaves to spotlight critical data movements, registers, or bus transitions during lectures.
+- **Distraction-Free Fullscreen Mode**: Seamless integration with the browser's Fullscreen API (<kbd>F11</kbd> / Fullscreen button) for an immersive lecture experience.
+
+### 8. Continuous Deployment & Netlify Pipeline
+- **Automated GitHub Actions CI/CD**: Configured GitHub workflow in `.github/workflows/deploy.yaml` targeting production deployment on push to `main` or via manual dispatch.
+- **Optimized Caching**: Leverages Node.js 22, pnpm 9, and selective `node_modules` caching for rapid, reliable builds.
+- **Automated Netlify Deployments**: Automatically builds and deploys production-ready assets with atomic rollbacks and zero downtime.
+
 ---
 
 ## 🏗️ System Architecture
@@ -162,8 +189,8 @@ All industry-standard 8085 test suites pass with exact hardware signatures store
 ### Installation
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/8085-compiler.git
-cd 8085-compiler
+git clone https://github.com/Kishan-Agarwal-28/8085_studio.git
+cd 8085_studio
 
 # Install dependencies
 npm install
@@ -187,20 +214,29 @@ npm start
 
 ## ⌨️ Keyboard Shortcuts
 
-| Shortcut | Action |
-| :--- | :--- |
-| `F9` / `Ctrl + Enter` | Assemble & Run program |
-| `Space` | Play / Pause continuous execution |
-| `→` (Right Arrow) | Step forward one micro-cycle |
-| `←` (Left Arrow) | Step backward one micro-cycle |
-| `R` | Reset simulator to step 0 |
+| Shortcut | Context | Action |
+| :--- | :--- | :--- |
+| `F9` / `Ctrl + Enter` | Global | Assemble & Run program |
+| `Space` | Global | Play / Pause continuous execution |
+| `→` (Right Arrow) | Global | Step forward one micro-cycle |
+| `←` (Left Arrow) | Global | Step backward one micro-cycle |
+| `R` | Global | Reset simulator to step 0 |
+| `Alt + V` | Simulator | Toggle Full-Width Visualizer mode |
+| `P` | Simulator | Toggle Presenter Mode overlay |
+| `T` | Presenter Mode | Toggle Click Pass-Through (Draw vs. Pass to App) |
+| `L` | Presenter Mode | Toggle Glowing Neon Laser Pointer |
+| `Ctrl + C` | Presenter Mode | Clear canvas annotations |
+| `Esc` | Presenter Mode | Exit Presenter Mode / Close canvas |
 
 ---
 
 ## 📁 Project Structure
 
 ```
-8085_compiler/
+8085_studio/
+├── .github/
+│   └── workflows/
+│       └── deploy.yaml         # GitHub Actions Netlify deployment pipeline
 ├── app/
 │   ├── layout.tsx              # Root layout with Geist fonts & toast provider
 │   ├── page.tsx                # Landing page with interactive hero & metrics
@@ -211,13 +247,14 @@ npm start
 │   └── globals.css             # Tailwind v4 theme & custom styling
 ├── components/
 │   ├── AlgorithmVisualizer.tsx # Two-pointer array visualization
-│   ├── CpuVisualizer.tsx       # Microprocessor core & register banks
+│   ├── CpuVisualizer.tsx       # CPU core, registers, interrupts, SIM/RIM & latch
 │   ├── DataFlowOverlay.tsx     # Animated bus particle dataflow
 │   ├── FileExplorer.tsx        # Virtual File System tree browser
 │   ├── FlagRegister.tsx        # Interactive PSW bit display
 │   ├── MemoryView.tsx          # 64KB linear hex grid & memory editor
 │   ├── Monaco8085Editor.tsx    # Monaco syntax highlighting for 8085
 │   ├── PlaybackControls.tsx    # Stepper, speed slider, and run controls
+│   ├── PresenterCanvas.tsx     # Transparent tldraw drawing overlay & laser pointer
 │   └── WasmHexViewer.tsx       # Intel hex dump output inspector
 ├── lib/
 │   ├── 8085/
