@@ -16,8 +16,10 @@ import {
   Layers,
   Edit3,
   CornerDownLeft,
+  Radio,
+  ShieldCheck,
 } from 'lucide-react';
-import type { TraceStep } from '@/lib/8085/types';
+import type { TraceStep, InterruptType } from '@/lib/8085/types';
 
 interface CpuVisualizerProps {
   steps: TraceStep[];
@@ -26,6 +28,10 @@ interface CpuVisualizerProps {
   memBaseAddress: number;
   onMemBaseChange: (a: number) => void;
   onMemoryByteChange?: (address: number, newValue: number) => void;
+  /** Callback to trigger a hardware interrupt from the UI */
+  onTriggerInterrupt?: (type: InterruptType) => void;
+  /** True when the simulation is paused at an infinite loop waiting for an interrupt */
+  waitingForInterrupt?: boolean;
 }
 
 const springTransition = { type: 'spring' as const, stiffness: 300, damping: 30 };
@@ -325,6 +331,221 @@ function getIncDecLatchState(step: TraceStep): IncDecLatchState {
   };
 }
 
+
+// ── SIM / RIM Visualizer ──────────────────────────────────────────────────────
+const SimRimCard: React.FC<{ step: TraceStep }> = ({ step }) => {
+  const mnemonic = (step.instruction || '').trim().split(/\s+/)[0].toUpperCase();
+  const isSIM = mnemonic === 'SIM';
+  const isRIM = mnemonic === 'RIM';
+  const isActive = isSIM || isRIM;
+
+  const is = step.interruptStatus;
+  const aVal = step.registers.A;
+
+  // ── SIM byte: A is the operand written by SIM ──
+  // D7=SOD  D6=SDE  D5=RST7.5-reset  D4=MSE  D3=M7.5  D2=M6.5  D1=M5.5  D0=—
+  const simBits = [
+    {
+      bit: 7, label: 'SOD',
+      desc: 'D7: Serial Output Data — value sent to SOD pin if SDE=1',
+      active: isSIM ? !!(aVal & 0x80) : false,
+      color: (isSIM && (aVal & 0x80)) ? 'bg-blue-500/20 text-blue-300 border-blue-500/40' : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/30',
+    },
+    {
+      bit: 6, label: 'SDE',
+      desc: 'D6: SOD Enable — must be 1 to output serial data on SOD pin',
+      active: isSIM ? !!(aVal & 0x40) : false,
+      color: (isSIM && (aVal & 0x40)) ? 'bg-blue-500/20 text-blue-300 border-blue-500/40' : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/30',
+    },
+    {
+      bit: 5, label: 'R7.5',
+      desc: 'D5: Reset RST7.5 flip-flop — writing 1 clears the latched RST7.5 pending bit',
+      active: isSIM ? !!(aVal & 0x10) : !!(is?.pending7_5),
+      color: isSIM
+        ? (aVal & 0x10) ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/30'
+        : is?.pending7_5 ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/30',
+    },
+    {
+      bit: 4, label: 'MSE',
+      desc: 'D4: Mask Set Enable — must be 1 for D3/D2/D1 to actually update the mask bits',
+      active: isSIM ? !!(aVal & 0x08) : !!(is?.enabled),
+      color: isSIM
+        ? (aVal & 0x08) ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/30'
+        : is?.enabled ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/30',
+    },
+    {
+      bit: 3, label: 'M7.5',
+      desc: 'D3: RST7.5 Mask — 1=masked (blocked), 0=enabled',
+      active: is?.mask7_5 ?? false,
+      color: is?.mask7_5 ? 'bg-rose-500/20 text-rose-400 border-rose-500/40' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+    },
+    {
+      bit: 2, label: 'M6.5',
+      desc: 'D2: RST6.5 Mask — 1=masked (blocked), 0=enabled',
+      active: is?.mask6_5 ?? false,
+      color: is?.mask6_5 ? 'bg-rose-500/20 text-rose-400 border-rose-500/40' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+    },
+    {
+      bit: 1, label: 'M5.5',
+      desc: 'D1: RST5.5 Mask — 1=masked (blocked), 0=enabled',
+      active: is?.mask5_5 ?? false,
+      color: is?.mask5_5 ? 'bg-rose-500/20 text-rose-400 border-rose-500/40' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+    },
+    {
+      bit: 0, label: 'SID',
+      desc: 'D0: Serial Input Data — value of SID pin (read via RIM into bit 7 of A)',
+      active: false,
+      color: 'bg-zinc-800/60 text-zinc-400 border-zinc-700/30',
+    },
+  ];
+
+  // ── RIM byte layout when A has been loaded by RIM ──
+  // D7=SID  D6=I7.5  D5=I6.5  D4=I5.5  D3=IE  D2=M7.5  D1=M6.5  D0=M5.5
+  const rimBits = [
+    { bit: 7, label: 'SID',  desc: 'D7: Serial Input Data pin value',                                    hi: !!(aVal & 0x80), hiColor: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
+    { bit: 6, label: 'I7.5', desc: 'D6: RST7.5 pending (flip-flop latched)',                             hi: !!(aVal & 0x40), hiColor: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+    { bit: 5, label: 'I6.5', desc: 'D5: RST6.5 pending',                                                 hi: !!(aVal & 0x20), hiColor: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+    { bit: 4, label: 'I5.5', desc: 'D4: RST5.5 pending',                                                 hi: !!(aVal & 0x10), hiColor: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
+    { bit: 3, label: 'IE',   desc: 'D3: Interrupt Enable (INTE flip-flop state)',                        hi: !!(aVal & 0x08), hiColor: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' },
+    { bit: 2, label: 'M7.5', desc: 'D2: RST7.5 Mask bit (1=masked)',                                    hi: !!(aVal & 0x04), hiColor: 'bg-rose-500/20 text-rose-400 border-rose-500/40' },
+    { bit: 1, label: 'M6.5', desc: 'D1: RST6.5 Mask bit (1=masked)',                                    hi: !!(aVal & 0x02), hiColor: 'bg-rose-500/20 text-rose-400 border-rose-500/40' },
+    { bit: 0, label: 'M5.5', desc: 'D0: RST5.5 Mask bit (1=masked)',                                    hi: !!(aVal & 0x01), hiColor: 'bg-rose-500/20 text-rose-400 border-rose-500/40' },
+  ];
+
+  const bitsToShow = isRIM ? rimBits.map(b => ({
+    bit: b.bit, label: b.label, desc: b.desc,
+    color: b.hi ? b.hiColor : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/30',
+    value: b.hi,
+  })) : simBits.map(b => ({
+    bit: b.bit, label: b.label, desc: b.desc,
+    color: b.color,
+    value: b.active,
+  }));
+
+  return (
+    <motion.div
+      layout
+      animate={{
+        borderColor: isActive ? (isSIM ? 'rgba(139,92,246,0.5)' : 'rgba(6,182,212,0.5)') : 'rgba(63,63,70,0.8)',
+        backgroundColor: isActive ? (isSIM ? 'rgba(139,92,246,0.04)' : 'rgba(6,182,212,0.04)') : 'rgba(9,9,11,0.7)',
+      }}
+      transition={springTransition}
+      className="p-3 rounded-lg border border-zinc-800/80 bg-zinc-950/70 flex flex-col gap-2"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <ShieldCheck className={`w-3.5 h-3.5 ${isActive ? (isSIM ? 'text-violet-400' : 'text-cyan-400') : 'text-zinc-500'}`} />
+          <span className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider">
+            SIM / RIM — Serial &amp; Interrupt Mask
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          <motion.span
+            animate={{
+              backgroundColor: isSIM ? 'rgba(139,92,246,0.2)' : 'rgba(39,39,42,0.8)',
+              color: isSIM ? '#c4b5fd' : '#71717a',
+              borderColor: isSIM ? 'rgba(139,92,246,0.5)' : '#3f3f46',
+            }}
+            transition={springTransition}
+            className="text-[9px] font-black font-mono px-1.5 py-0.5 rounded border uppercase"
+          >
+            SIM
+          </motion.span>
+          <motion.span
+            animate={{
+              backgroundColor: isRIM ? 'rgba(6,182,212,0.2)' : 'rgba(39,39,42,0.8)',
+              color: isRIM ? '#67e8f9' : '#71717a',
+              borderColor: isRIM ? 'rgba(6,182,212,0.5)' : '#3f3f46',
+            }}
+            transition={springTransition}
+            className="text-[9px] font-black font-mono px-1.5 py-0.5 rounded border uppercase"
+          >
+            RIM
+          </motion.span>
+        </div>
+      </div>
+
+      {/* Mode label */}
+      <div className={`text-[10px] font-mono px-2 py-1 rounded border leading-tight ${
+        isSIM ? 'bg-violet-500/10 border-violet-500/30 text-violet-300' :
+        isRIM ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300' :
+        'bg-zinc-900/60 border-zinc-800 text-zinc-500'
+      }`}>
+        {isSIM
+          ? `SIM writing 0x${(step.registers.A).toString(16).toUpperCase().padStart(2,'0')}H → Interrupt Mask Register`
+          : isRIM
+          ? `RIM read Interrupt Mask → A = 0x${(step.registers.A).toString(16).toUpperCase().padStart(2,'0')}H`
+          : 'Interrupt mask register state (execute SIM or RIM to update)'}
+      </div>
+
+      {/* Byte grid */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
+            {isRIM ? 'A ← RIM read (D7→D0)' : 'A → SIM write (D7→D0)'}
+          </span>
+          <span className="text-[9px] font-mono text-zinc-600">
+            0x{(step.registers.A).toString(16).toUpperCase().padStart(2, '0')}H
+          </span>
+        </div>
+        <div className="grid grid-cols-8 gap-0.5">
+          {bitsToShow.map(({ bit, label, desc, color, value }) => (
+            <motion.div
+              key={bit}
+              layout
+              animate={{ scale: value && isActive ? 1.06 : 1 }}
+              transition={springTransition}
+              title={desc}
+              className={`flex flex-col items-center gap-0.5 px-0.5 py-1.5 rounded border cursor-default select-none ${color}`}
+            >
+              <span className="text-[8px] font-mono text-zinc-600">D{bit}</span>
+              <span className="text-[9px] font-bold font-mono leading-none">{label}</span>
+              <span className={`text-[8px] font-black font-mono mt-0.5 ${value ? 'opacity-100' : 'opacity-40'}`}>
+                {value ? '1' : '0'}
+              </span>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+
+      {/* Bit-field summary when active */}
+      {isActive && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className={`text-[9px] font-mono leading-tight px-2 py-1 rounded border ${
+            isSIM ? 'bg-violet-500/8 border-violet-500/20 text-violet-200/80' : 'bg-cyan-500/8 border-cyan-500/20 text-cyan-200/80'
+          }`}
+        >
+          {isSIM ? (
+            <>
+              {`MSE=${!!(step.registers.A & 0x08) ? 1 : 0} → `}
+              {`M7.5=${is?.mask7_5 ? 1 : 0}  M6.5=${is?.mask6_5 ? 1 : 0}  M5.5=${is?.mask5_5 ? 1 : 0}  `}
+              {`SDE=${!!(step.registers.A & 0x40) ? 1 : 0} SOD=${!!(step.registers.A & 0x80) ? 1 : 0}`}
+            </>
+          ) : (
+            <>
+              {`IE=${!!(step.registers.A & 0x08) ? 1 : 0}  `}
+              {`M7.5=${!!(step.registers.A & 0x04) ? 1 : 0}  M6.5=${!!(step.registers.A & 0x02) ? 1 : 0}  M5.5=${!!(step.registers.A & 0x01) ? 1 : 0}  `}
+              {`I7.5=${!!(step.registers.A & 0x40) ? 1 : 0}  I6.5=${!!(step.registers.A & 0x20) ? 1 : 0}  I5.5=${!!(step.registers.A & 0x10) ? 1 : 0}  `}
+              {`SID=${!!(step.registers.A & 0x80) ? 1 : 0}`}
+            </>
+          )}
+        </motion.div>
+      )}
+
+      {/* Static guide when idle */}
+      {!isActive && (
+        <p className="text-[9px] text-zinc-600 leading-tight">
+          <span className="font-mono text-zinc-400">SIM</span>: writes A bits to mask register (D4=MSE gate) ·{' '}
+          <span className="font-mono text-zinc-400">RIM</span>: reads mask + pending + INTE + SID into A
+        </p>
+      )}
+    </motion.div>
+  );
+};
+
 const IncDecLatchCard: React.FC<{ step: TraceStep }> = ({ step }) => {
   const latch = getIncDecLatchState(step);
   const isInc = latch.action === 'INCREMENT';
@@ -427,6 +648,273 @@ const IncDecLatchCard: React.FC<{ step: TraceStep }> = ({ step }) => {
   );
 };
 
+interface InterruptLineDef {
+  id: 'TRAP' | 'RST7.5' | 'RST6.5' | 'RST5.5' | 'INTR';
+  pin: number;
+  pri: number;
+  vector: number | null;
+  label: string;
+  type: 'NMI' | 'Maskable';
+  trigger: string;
+  mask: 'mask7_5' | 'mask6_5' | 'mask5_5' | null;
+  pending: 'pending7_5' | 'pending6_5' | 'pending5_5' | null;
+}
+
+const INTERRUPT_LINES: InterruptLineDef[] = [
+  { id: 'TRAP',   pin: 6,  pri: 1, vector: 0x0024, label: '0024H', type: 'NMI',      trigger: 'Edge+Level', mask: null,       pending: null },
+  { id: 'RST7.5', pin: 7,  pri: 2, vector: 0x003C, label: '003CH', type: 'Maskable', trigger: 'Rising Edge', mask: 'mask7_5', pending: 'pending7_5' },
+  { id: 'RST6.5', pin: 8,  pri: 3, vector: 0x0034, label: '0034H', type: 'Maskable', trigger: 'High Level',  mask: 'mask6_5', pending: 'pending6_5' },
+  { id: 'RST5.5', pin: 9,  pri: 4, vector: 0x002C, label: '002CH', type: 'Maskable', trigger: 'High Level',  mask: 'mask5_5', pending: 'pending5_5' },
+  { id: 'INTR',   pin: 10, pri: 5, vector: null,    label: 'INTA↑', type: 'Maskable', trigger: 'High Level',  mask: null,       pending: null },
+];
+
+const HardwareInterruptsCard: React.FC<{
+  interruptStatus?: TraceStep['interruptStatus'];
+  onMemBaseChange: (addr: number) => void;
+  onTriggerInterrupt?: (type: InterruptType) => void;
+  waitingForInterrupt?: boolean;
+}> = ({ interruptStatus, onMemBaseChange, onTriggerInterrupt, waitingForInterrupt }) => {
+  const ie = interruptStatus?.enabled ?? false;
+  const [firedLine, setFiredLine] = React.useState<string | null>(null);
+
+  const handleFire = (id: InterruptType) => {
+    setFiredLine(id);
+    setTimeout(() => setFiredLine(null), 900);
+    onTriggerInterrupt?.(id);
+  };
+
+  return (
+    <div className="flex flex-col gap-2.5 p-3 bg-zinc-950/70 rounded-lg border border-zinc-800/80">
+
+      {/* ── Header + INTE flip-flop pill ── */}
+      <div className="flex items-center justify-between pb-1.5 border-b border-zinc-800/60">
+        <div className="flex items-center gap-2">
+          <Radio className="w-3.5 h-3.5 text-violet-400" />
+          <span className="text-[11px] font-bold text-zinc-200 uppercase tracking-wider">
+            Hardware Interrupt Controller
+          </span>
+        </div>
+        <motion.div
+          layout
+          animate={{
+            backgroundColor: ie ? 'rgba(16,185,129,0.18)' : 'rgba(39,39,42,0.8)',
+            borderColor: ie ? '#10b981' : '#3f3f46',
+          }}
+          transition={springTransition}
+          className="flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] font-mono font-bold"
+        >
+          <motion.span animate={{ color: ie ? '#34d399' : '#71717a' }} transition={springTransition}>
+            INTE
+          </motion.span>
+          <motion.div
+            animate={{
+              backgroundColor: ie ? '#10b981' : '#3f3f46',
+              boxShadow: ie ? '0 0 6px 1px rgba(16,185,129,0.5)' : 'none',
+            }}
+            transition={springTransition}
+            className="w-3.5 h-3.5 rounded-sm border border-zinc-600 flex items-center justify-center text-[9px] font-black text-white"
+          >
+            {ie ? '1' : '0'}
+          </motion.div>
+          <motion.span animate={{ color: ie ? '#6ee7b7' : '#52525b' }} transition={springTransition}>
+            {ie ? 'ENABLED' : 'DISABLED'}
+          </motion.span>
+        </motion.div>
+      </div>
+
+      {/* ── CPU halted / waiting banner ── */}
+      {waitingForInterrupt && (
+        <motion.div
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center gap-3 px-3 py-2 rounded-lg border border-amber-400/50 bg-amber-500/10 shadow-[0_0_12px_rgba(251,191,36,0.15)]"
+        >
+          <span className="relative flex h-2.5 w-2.5 shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+          </span>
+          <div className="flex flex-col min-w-0">
+            <span className="text-[11px] font-bold text-amber-300 leading-tight">CPU Halted — Awaiting Hardware Interrupt</span>
+            <span className="text-[10px] text-amber-200/70 leading-tight">
+              EI + infinite loop detected. Fire an unmasked pin below to resume.
+            </span>
+          </div>
+          <span className="ml-auto shrink-0 text-[9px] font-black bg-amber-500/25 text-amber-300 border border-amber-400/40 px-1.5 py-0.5 rounded uppercase tracking-wider">
+            WAIT
+          </span>
+        </motion.div>
+      )}
+
+      {/* ── Interrupt priority lines ── */}
+      <div className="flex flex-col gap-1.5">
+        {/* Column headers */}
+        <div className="grid grid-cols-[18px_1fr_68px_52px_60px] gap-x-2 px-1 pb-0.5 border-b border-zinc-800/40 items-center">
+          <span />
+          <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider">Signal / Pin</span>
+          <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider text-center">Vector</span>
+          <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider text-center">Status</span>
+          <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider text-center">Action</span>
+        </div>
+
+        {INTERRUPT_LINES.map((line) => {
+          const isMasked = line.mask && interruptStatus ? interruptStatus[line.mask] : false;
+          const isPending = line.pending && interruptStatus ? interruptStatus[line.pending] : false;
+          const isNMI = line.type === 'NMI';
+          const canFire = isNMI || (ie && !isMasked);
+          const isFiring = firedLine === line.id;
+
+          let stateLabel = 'DISABLED';
+          let stateDotCls = 'bg-zinc-600';
+          let stateTextCls = 'text-zinc-500';
+          let rowBgCls = 'bg-zinc-950/40';
+
+          if (isNMI) {
+            stateLabel = 'NMI'; stateDotCls = 'bg-rose-500'; stateTextCls = 'text-rose-400'; rowBgCls = 'bg-rose-500/5';
+          } else if (isMasked) {
+            stateLabel = 'MASKED'; stateDotCls = 'bg-zinc-600'; stateTextCls = 'text-zinc-500';
+          } else if (!ie) {
+            stateLabel = 'INTE=0'; stateDotCls = 'bg-zinc-600'; stateTextCls = 'text-zinc-500';
+          } else if (isPending) {
+            stateLabel = 'PENDING'; stateDotCls = 'bg-amber-400 animate-pulse'; stateTextCls = 'text-amber-400'; rowBgCls = 'bg-amber-500/8';
+          } else {
+            stateLabel = 'READY'; stateDotCls = 'bg-emerald-500'; stateTextCls = 'text-emerald-400';
+          }
+
+          return (
+            <motion.div
+              key={line.id}
+              layout
+              animate={{
+                backgroundColor: isFiring ? 'rgba(251,191,36,0.12)' : undefined,
+                borderColor: isFiring ? 'rgba(251,191,36,0.45)' : undefined,
+              }}
+              transition={{ duration: 0.35 }}
+              className={`grid grid-cols-[18px_1fr_68px_52px_60px] gap-x-2 px-2 py-2 rounded-lg border border-zinc-800/40 items-center ${rowBgCls} transition-colors`}
+            >
+              {/* Priority badge */}
+              <span className={`text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center shrink-0 ${
+                isNMI
+                  ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                  : canFire
+                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-zinc-800/80 text-zinc-600 border border-zinc-700/50'
+              }`}>
+                {line.pri}
+              </span>
+
+              {/* Signal name + pin + trigger metadata */}
+              <div className="flex flex-col min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${stateDotCls}`} />
+                  <span className={`text-[12px] font-bold font-mono ${isNMI ? 'text-rose-300' : canFire ? 'text-zinc-100' : 'text-zinc-500'}`}>
+                    {line.id}
+                  </span>
+                  {isNMI && (
+                    <span className="text-[8px] font-bold px-1 rounded bg-rose-500/20 text-rose-400 border border-rose-500/30 uppercase">NMI</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                  <span className="text-[9px] text-zinc-600 font-mono">Pin {line.pin}</span>
+                  <span className="text-[9px] text-zinc-700">·</span>
+                  <span className="text-[9px] text-zinc-500 font-mono">{line.trigger}</span>
+                  {line.mask && (
+                    <span className={`text-[9px] font-mono font-bold ${isMasked ? 'text-rose-400' : 'text-zinc-600'}`}>
+                      M={isMasked ? '1' : '0'}
+                    </span>
+                  )}
+                  {line.pending && (
+                    <span className={`text-[9px] font-mono font-bold ${isPending ? 'text-amber-400' : 'text-zinc-700'}`}>
+                      P={isPending ? '1' : '0'}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Vector address — clickable to jump memory view */}
+              <div className="flex items-center justify-center">
+                {line.vector !== null ? (
+                  <button
+                    type="button"
+                    onClick={() => onMemBaseChange(line.vector!)}
+                    className="text-[10px] font-mono font-bold text-cyan-400 hover:text-cyan-200 hover:underline transition-colors"
+                    title={`Jump memory view to ISR at ${line.label}`}
+                  >
+                    {line.label}
+                  </button>
+                ) : (
+                  <span className="text-[10px] font-mono text-zinc-500">{line.label}</span>
+                )}
+              </div>
+
+              {/* Status label */}
+              <div className="flex items-center justify-center">
+                <span className={`text-[9px] font-bold font-mono ${stateTextCls}`}>{stateLabel}</span>
+              </div>
+
+              {/* Fire button */}
+              <div className="flex items-center justify-center">
+                <motion.button
+                  type="button"
+                  onClick={() => handleFire(line.id as InterruptType)}
+                  disabled={!canFire && !isNMI}
+                  whileTap={canFire || isNMI ? { scale: 0.88 } : undefined}
+                  animate={isFiring ? { scale: [1, 1.18, 1] } : {}}
+                  transition={{ duration: 0.35 }}
+                  className={`w-full py-1 px-1.5 rounded-md text-[10px] font-bold font-mono border flex items-center justify-center gap-0.5 transition-all ${
+                    isFiring
+                      ? 'bg-amber-400 text-zinc-950 border-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.55)]'
+                      : canFire || isNMI
+                      ? waitingForInterrupt
+                        ? 'bg-amber-500/90 text-zinc-950 border-amber-400 hover:bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.35)] cursor-pointer animate-pulse'
+                        : 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-violet-600/80 hover:border-violet-500 hover:text-white hover:shadow-[0_0_6px_rgba(139,92,246,0.4)] cursor-pointer'
+                      : 'bg-zinc-900/60 text-zinc-700 border-zinc-800/60 cursor-not-allowed opacity-40'
+                  }`}
+                  title={
+                    canFire || isNMI
+                      ? `Fire hardware interrupt on Pin ${line.pin} (${line.id})`
+                      : 'Blocked: interrupt masked or INTE=0'
+                  }
+                >
+                  {isFiring ? '✓ ACK' : '⚡ Fire'}
+                </motion.button>
+              </div>
+            </motion.div>
+          );
+        })}
+      </div>
+
+      {/* ── SIM / RIM register bit layout ── */}
+      <div className="flex flex-col gap-1 bg-zinc-900/50 rounded-lg border border-zinc-800/50 px-2.5 py-2">
+        <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider mb-1">
+          SIM / RIM — Interrupt Mask Register (D7 → D0)
+        </span>
+        <div className="grid grid-cols-8 gap-0.5">
+          {[
+            { bit: 7, label: 'SOD',  cls: 'text-zinc-400', bg: 'bg-zinc-800/60', title: 'D7: Serial Output Data' },
+            { bit: 6, label: 'SDE',  cls: 'text-zinc-400', bg: 'bg-zinc-800/60', title: 'D6: SOD Enable' },
+            { bit: 5, label: 'R7.5', cls: interruptStatus?.pending7_5 ? 'text-amber-400 font-bold' : 'text-zinc-400', bg: interruptStatus?.pending7_5 ? 'bg-amber-500/15' : 'bg-zinc-800/60', title: 'D5: RST7.5 pending flip-flop (RIM read)' },
+            { bit: 4, label: 'MSE',  cls: 'text-zinc-400', bg: 'bg-zinc-800/60', title: 'D4: Mask Set Enable — must be 1 to write mask bits' },
+            { bit: 3, label: 'M7.5', cls: interruptStatus?.mask7_5 ? 'text-rose-400 font-bold' : 'text-emerald-400', bg: interruptStatus?.mask7_5 ? 'bg-rose-500/15' : 'bg-emerald-500/10', title: 'D3: RST7.5 Mask (1=masked)' },
+            { bit: 2, label: 'M6.5', cls: interruptStatus?.mask6_5 ? 'text-rose-400 font-bold' : 'text-emerald-400', bg: interruptStatus?.mask6_5 ? 'bg-rose-500/15' : 'bg-emerald-500/10', title: 'D2: RST6.5 Mask (1=masked)' },
+            { bit: 1, label: 'M5.5', cls: interruptStatus?.mask5_5 ? 'text-rose-400 font-bold' : 'text-emerald-400', bg: interruptStatus?.mask5_5 ? 'bg-rose-500/15' : 'bg-emerald-500/10', title: 'D1: RST5.5 Mask (1=masked)' },
+            { bit: 0, label: 'SID',  cls: 'text-zinc-400', bg: 'bg-zinc-800/60', title: 'D0: Serial Input Data (RIM read)' },
+          ].map(({ bit, label, cls, bg, title }) => (
+            <div key={bit} className={`flex flex-col items-center gap-0.5 px-0.5 py-1 rounded border border-zinc-700/30 ${bg}`} title={title}>
+              <span className="text-[8px] font-mono text-zinc-600">D{bit}</span>
+              <span className={`text-[9px] font-bold font-mono ${cls}`}>{label}</span>
+            </div>
+          ))}
+        </div>
+        <p className="text-[9px] text-zinc-600 mt-0.5 leading-tight">
+          <span className="font-mono text-zinc-400">SIM</span> sets mask bits ·{' '}
+          <span className="font-mono text-zinc-400">RIM</span> reads SID + pending ·{' '}
+          <span className="font-mono text-zinc-400">EI</span>/<span className="font-mono text-zinc-400">DI</span> control INTE globally
+        </p>
+      </div>
+    </div>
+  );
+};
+
 export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
   steps,
   memory,
@@ -434,6 +922,8 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
   memBaseAddress,
   onMemBaseChange,
   onMemoryByteChange,
+  onTriggerInterrupt,
+  waitingForInterrupt,
 }) => {
   // Direct Memory Jump State
   const [jumpInput, setJumpInput] = useState(toHex(memBaseAddress, 4));
@@ -564,9 +1054,9 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
       </div>
 
       {/* ─── 2. MIDDLE: Interactive CPU Subsystem ─── */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
         {/* ─── Left Box: ALU & Logic Operations Center (5 cols) ─── */}
-        <div className="lg:col-span-5 flex flex-col gap-3 rounded-xl border border-zinc-800/90 bg-zinc-900/30 p-3.5 shadow-sm">
+        <div className="lg:col-span-5 flex flex-col gap-3 rounded-xl border border-zinc-800/90 bg-zinc-900/30 p-3.5 shadow-sm h-full">
           <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
             <div className="flex items-center gap-2">
               <Scale className="w-4 h-4 text-cyan-400" />
@@ -671,10 +1161,13 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
 
           {/* 16-bit Incrementer / Decrementer Address Latch */}
           <IncDecLatchCard step={step} />
+
+          {/* SIM / RIM — Serial & Interrupt Mask Visualizer */}
+          <SimRimCard step={step} />
         </div>
 
         {/* ─── Right Box: Registers & Internal Bus (7 cols) ─── */}
-        <div className="lg:col-span-7 flex flex-col gap-3 rounded-xl border border-zinc-800/90 bg-zinc-900/30 p-3.5 shadow-sm">
+        <div className="lg:col-span-7 flex flex-col gap-3 rounded-xl border border-zinc-800/90 bg-zinc-900/30 p-3.5 shadow-sm h-full">
           <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
             <div className="flex items-center gap-2">
               <Cpu className="w-4 h-4 text-amber-400" />
@@ -824,6 +1317,14 @@ export const CpuVisualizer: React.FC<CpuVisualizerProps> = ({
               <span className="text-xs text-zinc-500 italic">No active bus transfer</span>
             )}
           </div>
+
+          {/* 5. 8085 Hardware Interrupt Controller */}
+          <HardwareInterruptsCard
+            interruptStatus={step.interruptStatus}
+            onMemBaseChange={onMemBaseChange}
+            onTriggerInterrupt={onTriggerInterrupt}
+            waitingForInterrupt={waitingForInterrupt}
+          />
         </div>
       </div>
 

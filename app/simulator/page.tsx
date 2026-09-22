@@ -11,7 +11,7 @@ import React, {
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { PRESET_PROGRAMS, PresetProgram } from '@/lib/8085/presets';
-import { CompileResult, SimulationResult, TraceStep } from '@/lib/8085/types';
+import { CompileResult, SimulationResult, TraceStep, InterruptType } from '@/lib/8085/types';
 import { WorkerClient } from '@/lib/worker-client';
 import { toast } from '@/components/ui/toast';
 import {
@@ -506,11 +506,17 @@ function SimulatorApp() {
     }
 
     if (sim.success && sim.steps.length > 0) {
+      const waitNotice = sim.waitingForInterrupt
+        ? ' CPU waiting in loop for hardware interrupt. Click "⚡ Fire" in the interrupt card below.'
+        : ' Press Space or Play to start.';
       toast.add({
-        title: 'Simulation Ready',
-        description: `${sim.steps.length} steps recorded (${sim.totalCycles} T-states). Press Space or Play to start.`,
-        type: 'success',
+        title: sim.waitingForInterrupt ? 'Waiting for Hardware Interrupt' : 'Simulation Ready',
+        description: `${sim.steps.length} steps recorded (${sim.totalCycles} T-states).${waitNotice}`,
+        type: sim.waitingForInterrupt ? 'info' : 'success',
       });
+      if (sim.waitingForInterrupt) {
+        setCurrentStep(sim.steps.length - 1);
+      }
     } else {
       toast.add({
         title: 'Simulation Warning',
@@ -519,6 +525,57 @@ function SimulatorApp() {
       });
     }
   }, [code, currentPreset.initialMemory, userMemoryEdits]);
+
+  // STEP 3: Trigger Hardware Interrupt
+  const handleTriggerInterrupt = useCallback(
+    (type: InterruptType) => {
+      if (!WorkerClient.isWaitingForInterrupt()) {
+        toast.add({
+          title: 'Cannot Fire Interrupt',
+          description:
+            'CPU is not in an interrupt wait state. Run a program that executes EI and loops in a wait state (e.g. WAIT: JMP WAIT) first.',
+          type: 'warning',
+        });
+        return;
+      }
+
+      const currentStepsCount = simulationResult?.steps.length ?? 0;
+      const res = WorkerClient.triggerInterrupt(type, currentStepsCount);
+
+      if (!res || res.steps.length === 0) {
+        toast.add({
+          title: `Interrupt ${type} Ignored`,
+          description: `Interrupt is currently masked via SIM or global interrupts (INTE) are disabled (DI).`,
+          type: 'error',
+        });
+        return;
+      }
+
+      setSimulationResult((prev) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          steps: [...prev.steps, ...res.steps],
+          totalCycles: prev.totalCycles + res.totalCycles,
+          finalRegisters: res.finalRegisters,
+          finalFlags: res.finalFlags,
+          memory: res.memory,
+          waitingForInterrupt: res.waitingForInterrupt,
+        };
+      });
+
+      // Jump to start of the newly added interrupt sequence and play
+      setCurrentStep(currentStepsCount);
+      setIsPlaying(true);
+
+      toast.add({
+        title: `Hardware Interrupt ${type} Fired!`,
+        description: `CPU acknowledged ${type} and vectored to ISR (+${res.steps.length} steps).`,
+        type: 'success',
+      });
+    },
+    [simulationResult]
+  );
 
   // Global keyboard shortcuts (F9 / Ctrl+Enter, Ctrl+S, Space, Arrows, R)
   useEffect(() => {
@@ -687,6 +744,7 @@ function SimulatorApp() {
 
         {/* File Explorer Toggle Button */}
         <button
+          type='button'
           onClick={handleToggleExplorer}
           className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
             isExplorerOpen
@@ -735,6 +793,7 @@ function SimulatorApp() {
             <span className="hidden sm:inline">Guide</span>
           </Link>
           <button
+            type='button'
             onClick={handleCompile}
             className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors active:scale-[0.97]"
           >
@@ -742,6 +801,7 @@ function SimulatorApp() {
             Compile
           </button>
           <button
+            type='button'
             onClick={handleRun}
             className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white px-3.5 py-1.5 text-xs font-semibold shadow-sm transition-colors active:scale-[0.97]"
             title="Run / Simulate (F9 or Ctrl+Enter)"
@@ -751,6 +811,7 @@ function SimulatorApp() {
           </button>
           {compileResult?.hexDump && (
             <button
+              type='button'
               onClick={handleDownloadHex}
               className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
               title="Download Hex Dump as a text file"
@@ -927,6 +988,7 @@ function SimulatorApp() {
           {/* Playback Control Bar */}
           <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-card shrink-0">
             <button
+              type='button'
               onClick={handleReset}
               disabled={totalSteps === 0}
               className="p-1.5 rounded-md hover:bg-accent disabled:opacity-40 transition-colors"
@@ -935,6 +997,7 @@ function SimulatorApp() {
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
             <button
+              type='button'
               onClick={handlePrevStep}
               disabled={totalSteps === 0 || currentStep === 0}
               className="p-1.5 rounded-md hover:bg-accent disabled:opacity-40 transition-colors"
@@ -942,7 +1005,7 @@ function SimulatorApp() {
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <button
+            <button type="button"
               onClick={handleTogglePlay}
               disabled={totalSteps === 0}
               className="p-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors"
@@ -950,7 +1013,7 @@ function SimulatorApp() {
             >
               {isPlaying ? <Pause className="h-4 w-4 fill-current" /> : <Play className="h-4 w-4 fill-current" />}
             </button>
-            <button
+            <button type="button"
               onClick={handleNextStep}
               disabled={totalSteps === 0 || currentStep >= totalSteps - 1}
               className="p-1.5 rounded-md hover:bg-accent disabled:opacity-40 transition-colors"
@@ -958,7 +1021,7 @@ function SimulatorApp() {
             >
               <ChevronRight className="h-4 w-4" />
             </button>
-            <button
+            <button type="button"
               onClick={() => {
                 setIsPlaying(false);
                 setCurrentStep(Math.max(0, totalSteps - 1));
@@ -992,7 +1055,7 @@ function SimulatorApp() {
             {/* Speed Multiplier Pill Buttons */}
             <div className="flex items-center border border-border rounded-md overflow-hidden ml-1">
               {[0.25,0.5, 1,1.5, 2, 4].map((s) => (
-                <button
+                <button type="button"
                   key={s}
                   onClick={() => setSpeed(s)}
                   className={`px-2 py-0.5 text-[11px] font-mono transition-colors ${
@@ -1017,6 +1080,8 @@ function SimulatorApp() {
                 memBaseAddress={memBaseAddress}
                 onMemBaseChange={setMemBaseAddress}
                 onMemoryByteChange={handleMemoryByteChange}
+                onTriggerInterrupt={handleTriggerInterrupt}
+                waitingForInterrupt={simulationResult.waitingForInterrupt}
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-4">

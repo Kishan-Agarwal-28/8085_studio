@@ -300,11 +300,26 @@ export class Assembler8085 {
       labelsObj[lbl] = addr;
     });
 
+    // Determine execution entry address
+    let entryAddress = this.origin;
+    if (this.symbolTable.has('START')) {
+      entryAddress = this.symbolTable.get('START')!;
+    } else if (this.symbolTable.has('MAIN')) {
+      entryAddress = this.symbolTable.get('MAIN')!;
+    } else {
+      // If origin is in low interrupt vector table space (< 0x0100) and code has a main section (>= 0x0100)
+      const nonVectorItem = parsedLines.find((p) => p.address >= 0x0100);
+      if (this.origin < 0x0100 && nonVectorItem) {
+        entryAddress = nonVectorItem.address;
+      }
+    }
+
     return {
       success: this.diagnostics.filter((d) => d.severity === 'error').length === 0,
       diagnostics: this.diagnostics,
       machineCode,
       startAddress: this.origin,
+      entryAddress,
       labels: labelsObj,
       lineAddressMap,
       addressLineMap,

@@ -47,6 +47,16 @@ export interface DataTransferEvent {
   value: number;
 }
 
+export interface InterruptStatus {
+  enabled: boolean; // IE flip-flop (INTE)
+  mask7_5: boolean; // M7.5 mask bit
+  mask6_5: boolean; // M6.5 mask bit
+  mask5_5: boolean; // M5.5 mask bit
+  pending7_5: boolean; // Latched RST 7.5 flip-flop
+  pending6_5: boolean; // RST 6.5 pending
+  pending5_5: boolean; // RST 5.5 pending
+}
+
 export interface TraceStep {
   stepIndex: number;
   cycle: number;
@@ -66,7 +76,12 @@ export interface TraceStep {
   activeMemoryAddresses: number[];
   memoryDelta?: { address: number; oldValue: number; newValue: number }[];
   isHalt?: boolean;
+  interruptStatus?: InterruptStatus;
+  /** True when this step is an infinite loop (JMP to self) waiting for a hardware interrupt */
+  waitingForInterrupt?: boolean;
 }
+
+export type InterruptType = 'TRAP' | 'RST7.5' | 'RST6.5' | 'RST5.5' | 'INTR';
 
 export interface CompileDiagnostic {
   line: number;
@@ -80,6 +95,7 @@ export interface CompileResult {
   diagnostics: CompileDiagnostic[];
   machineCode: Uint8Array;
   startAddress: number;
+  entryAddress?: number;
   labels: Record<string, number>;
   lineAddressMap: Map<number, number>; // line -> address
   addressLineMap: Map<number, number>; // address -> line
@@ -95,4 +111,6 @@ export interface SimulationResult {
   finalRegisters: RegisterState;
   finalFlags: StatusFlags;
   memory: Uint8Array;
+  /** True if simulation stopped at an infinite loop waiting for hardware interrupt */
+  waitingForInterrupt?: boolean;
 }

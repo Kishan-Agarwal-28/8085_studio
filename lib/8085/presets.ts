@@ -195,4 +195,69 @@ DOUBLE_A:
   RET             ; Return to caller
 `,
   },
+  {
+    id: 'hardware-interrupt-rst55',
+    name: 'Hardware Interrupt & ISR (RST 5.5)',
+    category: 'Interrupts',
+    description: 'Demonstrates vector table at 002CH, unmasking RST 5.5 via SIM, enabling INTE (EI), and entering WAIT loop until RST 5.5 is triggered.',
+    initialMemory: [
+      { address: 0x2400, values: [0x15] }, // X = 21
+      { address: 0x2500, values: [0x2A] }, // Y = 42
+      { address: 0x2600, values: [0x00] }, // Result location
+    ],
+    code: `; ============================================
+; Program: Hardware Interrupt RST 5.5 & ISR
+; 1. Sets vector jump at 002CH
+; 2. Initializes Stack Pointer (3000H)
+; 3. Unmasks RST 5.5 via SIM & enables interrupts (EI)
+; 4. Enters WAIT loop until hardware interrupt fires
+; 5. Click "⚡ Fire" on RST 5.5 in Interrupt Controller!
+; ============================================
+
+; --- 1. VECTOR TABLE ---
+; Placed exactly at 002CH for RST 5.5
+ORG 002CH
+JMP ISR         ; Vector jump to Interrupt Service Routine
+
+; --- 2. MAIN PROGRAM ---
+ORG 2000H
+LXI SP, 3000H   ; Initialize stack (mandatory for interrupts)
+
+; Unmask RST 5.5 (Bit 3=1 for MSE, Bit 0=0 to unmask RST 5.5)
+MVI A, 0EH
+SIM
+EI              ; Enable Interrupts globally (INTE=1)
+
+WAIT:
+JMP WAIT        ; Waiting for hardware interrupt to trigger!
+
+; --- 3. INTERRUPT SERVICE ROUTINE (ISR) ---
+; Runs when RST 5.5 pin is pulsed
+ISR:
+LDA 2400H       ; Load X into A
+MOV B, A        ; Store X in B
+LDA 2500H       ; Load Y into A
+
+; Compare Y (in A) with X (in B)
+CMP B
+JC GREATER      ; If Y < X (borrow needed) -> CY=1
+JZ EQUAL        ; If Y == X -> Z=1
+
+; Case X < Y
+MVI A, 00H
+STA 2600H
+RET             ; Return to main program wait loop
+
+GREATER:
+MVI A, FFH
+STA 2600H
+RET
+
+EQUAL:
+; Mask RST 5.5 via SIM (Bit 3=1, Bit 0=1)
+MVI A, 0FH
+SIM
+RET
+`,
+  },
 ];

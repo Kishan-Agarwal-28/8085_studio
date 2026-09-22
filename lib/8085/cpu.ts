@@ -33,6 +33,8 @@ export class CPU8085 {
   private pending5_5 = false;      // RST 5.5 interrupt pending
   private pending6_5 = false;      // RST 6.5 interrupt pending
   private pending7_5 = false;      // RST 7.5 interrupt pending
+  private pendingTrap = false;     // TRAP interrupt pending (NMI)
+  private pendingINTR = false;     // INTR interrupt pending (non-vectored)
   private sod = false;             // Serial Output Data
   private sid = false;             // Serial Input Data
   private flagV = false;           // Undocumented Overflow flag (bit 1 of PSW)
@@ -44,6 +46,7 @@ export class CPU8085 {
   public ioPorts = new Uint8Array(256);
 
   private halted = false;
+  private waitingForInterrupt = false;
   private totalCycles = 0;
 
   constructor() {
@@ -71,19 +74,22 @@ export class CPU8085 {
     this.pending5_5 = false;
     this.pending6_5 = false;
     this.pending7_5 = false;
+    this.pendingTrap = false;
+    this.pendingINTR = false;
     this.sod = false;
     this.sid = false;
     this.flagV = false;
     this.flagK = false;
     this.halted = false;
+    this.waitingForInterrupt = false;
     this.totalCycles = 0;
   }
 
-  public loadProgram(startAddress: number, machineCode: Uint8Array): void {
+  public loadProgram(startAddress: number, machineCode: Uint8Array, entryAddress?: number): void {
     for (let i = 0; i < machineCode.length; i++) {
       this.memory[(startAddress + i) & 0xFFFF] = machineCode[i];
     }
-    this.PC = startAddress;
+    this.PC = entryAddress !== undefined ? entryAddress : startAddress;
   }
 
   public getRegisterState(): RegisterState {
@@ -111,8 +117,132 @@ export class CPU8085 {
     return this.halted;
   }
 
+  public isWaitingForInterrupt(): boolean {
+    return this.waitingForInterrupt;
+  }
+
   public getCycles(): number {
     return this.totalCycles;
+  }
+
+  /**
+   * Signal a hardware interrupt on the given pin.
+   * For RST 7.5 (edge-triggered), this latches the D flip-flop.
+   * For RST 6.5, RST 5.5, and INTR (level-triggered), this sets pending.
+   * TRAP is non-maskable and always fires.
+   */
+  public triggerInterrupt(type: 'TRAP' | 'RST7.5' | 'RST6.5' | 'RST5.5' | 'INTR'): void {
+    switch (type) {
+      case 'TRAP':
+        // TRAP is edge+level triggered, non-maskable — handled immediately
+        // We set a flag; serviceInterrupt will process it
+        this.pendingTrap = true;
+        break;
+      case 'RST7.5':
+        this.pending7_5 = true;
+        break;
+      case 'RST6.5':
+        this.pending6_5 = true;
+        break;
+      case 'RST5.5':
+        this.pending5_5 = true;
+        break;
+      case 'INTR':
+        this.pendingINTR = true;
+        break;
+    }
+    // Un-halt the CPU so it can service the interrupt
+    if (this.halted) {
+      this.halted = false;
+    }
+  }
+
+  /**
+   * Check and service pending interrupts in priority order.
+   * Returns a TraceStep if an interrupt was serviced, null otherwise.
+   * This should be called between instruction executions.
+   */
+  public serviceInterrupt(stepIndex: number, addressLineMap: Map<number, number>): TraceStep | null {
+    let vectorAddr: number | null = null;
+    let intName = '';
+
+    // Priority 1: TRAP (non-maskable)
+    if (this.pendingTrap) {
+      this.pendingTrap = false;
+      vectorAddr = 0x0024;
+      intName = 'TRAP';
+    }
+    // Priority 2: RST 7.5 (edge-triggered, latched)
+    else if (this.interruptEnable && !this.mask7_5 && this.pending7_5) {
+      this.pending7_5 = false; // Clear the latch
+      vectorAddr = 0x003C;
+      intName = 'RST 7.5';
+    }
+    // Priority 3: RST 6.5 (level-sensitive)
+    else if (this.interruptEnable && !this.mask6_5 && this.pending6_5) {
+      this.pending6_5 = false;
+      vectorAddr = 0x0034;
+      intName = 'RST 6.5';
+    }
+    // Priority 4: RST 5.5 (level-sensitive)
+    else if (this.interruptEnable && !this.mask5_5 && this.pending5_5) {
+      this.pending5_5 = false;
+      vectorAddr = 0x002C;
+      intName = 'RST 5.5';
+    }
+    // Priority 5: INTR (non-vectored, but for simulation we assume RST 7 at 0x0038)
+    else if (this.interruptEnable && this.pendingINTR) {
+      this.pendingINTR = false;
+      vectorAddr = 0x0038; // Simulated as RST 7
+      intName = 'INTR';
+    }
+
+    if (vectorAddr === null) return null;
+
+    const instructionAddress = this.PC;
+    const line = addressLineMap.get(instructionAddress) || 1;
+
+    // Push PC onto stack (exactly like CALL)
+    this.SP = (this.SP - 1) & 0xFFFF;
+    this.memory[this.SP] = (this.PC >> 8) & 0xFF; // PCH
+    this.SP = (this.SP - 1) & 0xFFFF;
+    this.memory[this.SP] = this.PC & 0xFF;         // PCL
+
+    // Disable interrupts (INTE flip-flop reset)
+    this.interruptEnable = false;
+
+    // Vector to ISR
+    this.PC = vectorAddr;
+
+    this.totalCycles += 12; // Interrupt acknowledge takes ~12 T-states
+
+    return {
+      stepIndex,
+      cycle: this.totalCycles,
+      address: instructionAddress,
+      line,
+      instruction: `INT ${intName}`,
+      bytes: [],
+      registers: this.getRegisterState(),
+      flags: this.getFlags(),
+      description: `Hardware Interrupt ${intName} acknowledged: PC pushed to stack [SP=0x${this.SP.toString(16).toUpperCase().padStart(4, '0')}H], INTE=0, vectoring to ISR at 0x${vectorAddr.toString(16).toUpperCase().padStart(4, '0')}H`,
+      activeRegisters: ['PC', 'SP'],
+      activeMemoryAddresses: [this.SP, (this.SP + 1) & 0xFFFF, vectorAddr],
+      memoryDelta: [
+        { address: this.SP, oldValue: 0, newValue: this.PC & 0xFF },
+        { address: (this.SP + 1) & 0xFFFF, oldValue: 0, newValue: (this.PC >> 8) & 0xFF },
+      ],
+      isHalt: false,
+      interruptStatus: {
+        enabled: this.interruptEnable,
+        mask7_5: this.mask7_5,
+        mask6_5: this.mask6_5,
+        mask5_5: this.mask5_5,
+        pending7_5: this.pending7_5,
+        pending6_5: this.pending6_5,
+        pending5_5: this.pending5_5,
+      },
+    };
   }
 
   // Register Pair Helpers
@@ -1408,19 +1538,91 @@ export class CPU8085 {
       activeMemoryAddresses,
       memoryDelta: memDelta.length > 0 ? memDelta : undefined,
       isHalt: this.halted,
+      interruptStatus: {
+        enabled: this.interruptEnable,
+        mask7_5: this.mask7_5,
+        mask6_5: this.mask6_5,
+        mask5_5: this.mask5_5,
+        pending7_5: this.pending7_5,
+        pending6_5: this.pending6_5,
+        pending5_5: this.pending5_5,
+      },
     };
   }
 
   /**
-   * Run simulation up to maxSteps and return all TraceSteps
+   * Run simulation up to maxSteps and return all TraceSteps.
+   * Detects infinite loops (JMP to self) when interrupts are enabled and marks them as waitingForInterrupt.
    */
   public simulate(addressLineMap: Map<number, number>, maxSteps = 2000): TraceStep[] {
     const trace: TraceStep[] = [];
     let stepCount = 0;
+    this.waitingForInterrupt = false;
 
     while (!this.halted && stepCount < maxSteps) {
+      const prevPC = this.PC;
       const stepInfo = this.step(stepCount, addressLineMap);
       if (!stepInfo) break;
+
+      // Detect infinite loop: JMP instruction that lands back on itself
+      const isJmpToSelf = this.PC === prevPC;
+      if (isJmpToSelf) {
+        stepInfo.waitingForInterrupt = true;
+        stepInfo.description += this.interruptEnable
+          ? ' [⏸ Waiting for hardware interrupt — click ⚡ Fire below]'
+          : ' [⏸ In wait loop (INTE=0) — TRAP (NMI) can still fire]';
+        trace.push(stepInfo);
+        this.waitingForInterrupt = true;
+        break;
+      }
+
+      trace.push(stepInfo);
+      stepCount++;
+      if (stepInfo.isHalt) break;
+    }
+
+    return trace;
+  }
+
+  /**
+   * Continue simulation after a hardware interrupt is triggered.
+   * Triggers the interrupt, services it, then continues execution.
+   */
+  public simulateAfterInterrupt(
+    interruptType: 'TRAP' | 'RST7.5' | 'RST6.5' | 'RST5.5' | 'INTR',
+    startStepIndex: number,
+    addressLineMap: Map<number, number>,
+    maxSteps = 2000,
+  ): TraceStep[] {
+    const trace: TraceStep[] = [];
+    this.waitingForInterrupt = false;
+
+    // 1. Trigger the interrupt signal
+    this.triggerInterrupt(interruptType);
+
+    // 2. Service the interrupt (push PC, vector to ISR)
+    const intStep = this.serviceInterrupt(startStepIndex, addressLineMap);
+    if (intStep) {
+      trace.push(intStep);
+    }
+
+    // 3. Continue executing from ISR until HLT, RET back to infinite loop, or maxSteps
+    let stepCount = startStepIndex + 1;
+    while (!this.halted && stepCount < startStepIndex + maxSteps) {
+      const prevPC = this.PC;
+      const stepInfo = this.step(stepCount, addressLineMap);
+      if (!stepInfo) break;
+
+      // If we returned to an infinite loop (JMP to self), stop cleanly
+      const isJmpToSelf = this.PC === prevPC;
+      if (isJmpToSelf) {
+        stepInfo.waitingForInterrupt = true;
+        stepInfo.description += ' [⏸ Returned to wait loop — trigger another interrupt or stop]';
+        trace.push(stepInfo);
+        this.waitingForInterrupt = true;
+        break;
+      }
+
       trace.push(stepInfo);
       stepCount++;
       if (stepInfo.isHalt) break;
