@@ -55,7 +55,7 @@ export const metadata: Metadata = {
     '64kb memory inspector',
     'computer architecture simulator',
     'microprocessor lab online',
-    'tldraw presenter mode',
+    'excalidraw presenter mode',
   ],
   referrer: 'origin-when-cross-origin',
   creator: '8085 Studio',
@@ -145,7 +145,7 @@ const jsonLd = {
         'Live SIM and RIM instruction decoders',
         '16-bit incrementer/decrementer address latch visualizer',
         'Emulation of all 10 undocumented ghost opcodes (DSUB, ARHL, RDEL, etc.)',
-        'Presenter mode with transparent tldraw whiteboard canvas and glowing laser pointer',
+        'Presenter mode with transparent Excalidraw whiteboard canvas and glowing laser pointer',
       ],
     },
     {

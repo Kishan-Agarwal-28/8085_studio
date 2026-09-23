@@ -71,7 +71,7 @@
 
 ### 7. Presenter Mode & Full-Width Visualizer
 - **Full-Width Visualizer (`Alt + V`)**: Instantly collapse the code editor and file navigation tree to expand the CPU visualizer to 100% viewport width—ideal for classroom projections, technical demos, and wide screens.
-- **Interactive Presenter Canvas Overlay (`tldraw`)**: A fully transparent, non-intrusive drawing layer powered by `tldraw` rendered directly over the live simulator:
+- **Interactive Presenter Canvas Overlay (`Excalidraw`)**: A fully transparent, non-intrusive drawing layer powered by `Excalidraw` rendered directly over the live simulator:
   - Draw freehand sketches, boxes, arrows, highlighter markings, and text labels directly on top of the CPU architecture, memory grid, and bus animation.
   - Dark-mode optimized palette with high-contrast presentation colors.
 - **Click Pass-Through Toggle (<kbd>T</kbd>)**: One-key toggle between **Draw Mode** (annotate on canvas) and **Pass to App** (canvas becomes click-through, allowing live stepping, memory editing, register updates, and code execution underneath without hiding annotations).
@@ -254,7 +254,7 @@ npm start
 │   ├── MemoryView.tsx          # 64KB linear hex grid & memory editor
 │   ├── Monaco8085Editor.tsx    # Monaco syntax highlighting for 8085
 │   ├── PlaybackControls.tsx    # Stepper, speed slider, and run controls
-│   ├── PresenterCanvas.tsx     # Transparent tldraw drawing overlay & laser pointer
+│   ├── PresenterCanvas.tsx     # Transparent Excalidraw drawing overlay & laser pointer
 │   └── WasmHexViewer.tsx       # Intel hex dump output inspector
 ├── lib/
 │   ├── 8085/

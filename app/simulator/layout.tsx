@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 export const metadata: Metadata = {
   title: 'Simulator & IDE — Real-Time 8085 Microprocessor Studio',
   description:
-    'Live Intel 8085 assembly compiler, cycle-accurate virtual machine, and real-time CPU data bus visualizer. Step through micro-cycles, inspect registers, edit 64KB memory live, trigger hardware interrupts, and present with tldraw overlay whiteboard.',
+    'Live Intel 8085 assembly compiler, cycle-accurate virtual machine, and real-time CPU data bus visualizer. Step through micro-cycles, inspect registers, edit 64KB memory live, trigger hardware interrupts, and present with Excalidraw overlay whiteboard.',
   alternates: {
     canonical: '/simulator',
   },

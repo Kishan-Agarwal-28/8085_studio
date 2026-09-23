@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "tldraw/tldraw.css";
 @plugin 'tailwind-scrollbar';
 
 @custom-variant dark (&:is(.dark *));
@@ -165,43 +164,43 @@
   border-left: 4px solid #22c55e !important;
 }
 
-/* Presenter Mode: Transparent Tldraw Canvas Overlay */
-.presenter-tldraw-overlay {
-  --tl-color-background: transparent !important;
-  background: transparent !important;
-}
-
-.presenter-tldraw-overlay .tl-container,
-.presenter-tldraw-overlay .tl-canvas,
-.presenter-tldraw-overlay .tl-background,
-.presenter-tldraw-overlay .tl-background__wrapper,
-.presenter-tldraw-overlay .tlui-layout,
-.presenter-tldraw-overlay .tlui-layout__main {
+/* Presenter Mode: Transparent Excalidraw Canvas Overlay */
+.presenter-excalidraw-overlay {
   background: transparent !important;
   background-color: transparent !important;
 }
 
-/* Hide default watermark / extra clutter in presenter mode */
-.presenter-tldraw-overlay .tl-watermark,
-.presenter-tldraw-overlay .tl-navigation-zone {
+.presenter-excalidraw-overlay .excalidraw,
+.presenter-excalidraw-overlay .excalidraw.theme--dark,
+.presenter-excalidraw-overlay .excalidraw-container,
+.presenter-excalidraw-overlay .excalidraw .layer-ui__wrapper,
+.presenter-excalidraw-overlay .excalidraw canvas {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* Hide Excalidraw watermark, footer clutter & background patterns if any */
+.presenter-excalidraw-overlay .excalidraw .footer-center,
+.presenter-excalidraw-overlay .excalidraw .help-icon,
+.presenter-excalidraw-overlay .excalidraw .encrypted-icon {
   display: none !important;
 }
 
 /* Pass-through mode: ALL elements and pseudo-elements in canvas overlay have pointer-events: none */
-.presenter-tldraw-overlay.pass-through,
-.presenter-tldraw-overlay.pass-through *,
-.presenter-tldraw-overlay.pass-through ::before,
-.presenter-tldraw-overlay.pass-through ::after {
+.presenter-excalidraw-overlay.pass-through,
+.presenter-excalidraw-overlay.pass-through *,
+.presenter-excalidraw-overlay.pass-through ::before,
+.presenter-excalidraw-overlay.pass-through ::after {
   pointer-events: none !important;
 }
 
-/* Draw mode: canvas and its tools are clickable and interactive */
-.presenter-tldraw-overlay.draw-mode {
+/* Draw mode: canvas and its interactive elements are clickable and interactive */
+.presenter-excalidraw-overlay.draw-mode {
   pointer-events: auto !important;
 }
 
-.presenter-tldraw-overlay.draw-mode .tl-canvas,
-.presenter-tldraw-overlay.draw-mode .tl-canvas * {
+.presenter-excalidraw-overlay.draw-mode .excalidraw,
+.presenter-excalidraw-overlay.draw-mode .excalidraw canvas {
   pointer-events: auto !important;
 }
 

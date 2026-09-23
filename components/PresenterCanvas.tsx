@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Tldraw, Editor, TLComponents } from 'tldraw';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import dynamic from 'next/dynamic';
+import '@excalidraw/excalidraw/index.css';
+import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
 import {
   MousePointer,
   Pencil,
@@ -14,12 +16,22 @@ import {
   X,
   Highlighter,
   ArrowUpRight,
+  Minus,
   Square,
+  Circle,
   Type,
   Eraser,
   Palette,
   Sparkles,
 } from 'lucide-react';
+
+const Excalidraw = dynamic(
+  () => import('@excalidraw/excalidraw').then((mod) => mod.Excalidraw),
+  {
+    ssr: false,
+    loading: () => null,
+  }
+);
 
 interface PresenterCanvasProps {
   isOpen: boolean;
@@ -29,12 +41,12 @@ interface PresenterCanvasProps {
 }
 
 const HIGHLIGHT_COLORS = [
-  { name: 'Red', value: 'red', hex: '#ef4444' },
-  { name: 'Yellow', value: 'yellow', hex: '#eab308' },
-  { name: 'Light Blue', value: 'light-blue', hex: '#38bdf8' },
-  { name: 'Light Green', value: 'light-green', hex: '#4ade80' },
-  { name: 'Light Violet', value: 'light-violet', hex: '#a855f7' },
-  { name: 'White', value: 'white', hex: '#ffffff' },
+  { name: 'Yellow', hex: '#eab308' },
+  { name: 'Red', hex: '#ef4444' },
+  { name: 'Light Blue', hex: '#38bdf8' },
+  { name: 'Light Green', hex: '#4ade80' },
+  { name: 'Light Violet', hex: '#a855f7' },
+  { name: 'White', hex: '#ffffff' },
 ];
 
 export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
@@ -47,72 +59,125 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
   const [isLaserActive, setIsLaserActive] = useState<boolean>(false);
   const [laserPos, setLaserPos] = useState<{ x: number; y: number } | null>(null);
   const [isMouseDown, setIsMouseDown] = useState<boolean>(false);
-  const [activeTool, setActiveTool] = useState<string>('draw');
+  const [activeTool, setActiveTool] = useState<string>('freedraw');
   const [isCanvasVisible, setIsCanvasVisible] = useState<boolean>(true);
-  const [showFullUi, setShowFullUi] = useState<boolean>(true);
-  const [selectedColor, setSelectedColor] = useState<string>('yellow');
-  const editorRef = useRef<Editor | null>(null);
+  const [showFullUi, setShowFullUi] = useState<boolean>(false);
+  const [selectedColor, setSelectedColor] = useState<string>('#eab308');
+  const [excalidrawAPI, setExcalidrawAPI] = useState<ExcalidrawImperativeAPI | null>(null);
+  const excalidrawApiRef = useRef<ExcalidrawImperativeAPI | null>(null);
 
-  // Custom components to eliminate clutter and provide invisible background
-  const components: TLComponents = useMemo(
-    () => ({
-      Background: null,
-      ContextMenu: null,
-      HelpMenu: null,
-      MainMenu: null,
-      PageMenu: null,
-      NavigationPanel: null,
-    }),
-    []
-  );
-
-  // Handle editor mount
-  const handleMount = useCallback((editor: Editor) => {
-    editorRef.current = editor;
+  const handleExcalidrawAPI = useCallback((api: ExcalidrawImperativeAPI) => {
+    excalidrawApiRef.current = api;
+    setExcalidrawAPI(api);
     try {
-      editor.user.updateUserPreferences({ colorScheme: 'dark' });
-      editor.setCurrentTool('draw');
+      api.setActiveTool({ type: 'freedraw' });
+      api.updateScene({
+        appState: {
+          viewBackgroundColor: 'transparent',
+          theme: 'dark',
+          currentItemStrokeColor: '#eab308',
+          currentItemStrokeWidth: 2,
+          currentItemOpacity: 100,
+        },
+      });
     } catch {}
   }, []);
 
-  // Set tool in tldraw
+  // Set tool in Excalidraw
   const selectTool = useCallback((toolId: string) => {
     setActiveTool(toolId);
-    if (editorRef.current) {
+    const api = excalidrawApiRef.current || excalidrawAPI;
+    if (api) {
       try {
-        editorRef.current.setCurrentTool(toolId);
+        if (toolId === 'freedraw') {
+          api.setActiveTool({ type: 'freedraw' });
+          api.updateScene({
+            appState: {
+              currentItemOpacity: 100,
+              currentItemStrokeWidth: 2,
+            },
+          });
+        } else if (toolId === 'highlighter') {
+          api.setActiveTool({ type: 'freedraw' });
+          api.updateScene({
+            appState: {
+              currentItemOpacity: 40,
+              currentItemStrokeWidth: 6,
+            },
+          });
+        } else if (toolId === 'arrow') {
+          api.setActiveTool({ type: 'arrow' });
+          api.updateScene({
+            appState: {
+              currentItemOpacity: 100,
+              currentItemStrokeWidth: 2,
+            },
+          });
+        } else if (toolId === 'line') {
+          api.setActiveTool({ type: 'line' });
+          api.updateScene({
+            appState: {
+              currentItemOpacity: 100,
+              currentItemStrokeWidth: 2,
+            },
+          });
+        } else if (toolId === 'rectangle') {
+          api.setActiveTool({ type: 'rectangle' });
+          api.updateScene({
+            appState: {
+              currentItemOpacity: 100,
+              currentItemStrokeWidth: 2,
+            },
+          });
+        } else if (toolId === 'ellipse') {
+          api.setActiveTool({ type: 'ellipse' });
+          api.updateScene({
+            appState: {
+              currentItemOpacity: 100,
+              currentItemStrokeWidth: 2,
+            },
+          });
+        } else if (toolId === 'text') {
+          api.setActiveTool({ type: 'text' });
+        } else if (toolId === 'eraser') {
+          api.setActiveTool({ type: 'eraser' });
+        } else if (toolId === 'selection') {
+          api.setActiveTool({ type: 'selection' });
+        }
       } catch {}
     }
-  }, []);
+  }, [excalidrawAPI]);
 
-  // Set color in tldraw
-  const selectColor = useCallback((colorName: string) => {
-    setSelectedColor(colorName);
-    if (editorRef.current) {
+  // Set color in Excalidraw
+  const selectColor = useCallback((colorHex: string) => {
+    setSelectedColor(colorHex);
+    const api = excalidrawApiRef.current || excalidrawAPI;
+    if (api) {
       try {
-        editorRef.current.setStyleForNextShapes(
-          // @ts-expect-error tldraw DefaultColorStyle
-          { id: 'color', type: 'color' },
-          colorName
-        );
+        api.updateScene({
+          appState: {
+            currentItemStrokeColor: colorHex,
+          },
+        });
       } catch {}
     }
-  }, []);
+  }, [excalidrawAPI]);
 
   // Clear all annotations
   const handleClear = useCallback(() => {
-    if (editorRef.current) {
+    const api = excalidrawApiRef.current || excalidrawAPI;
+    if (api) {
       try {
-        const shapes = editorRef.current.getCurrentPageShapeIds();
-        editorRef.current.deleteShapes(Array.from(shapes));
+        api.updateScene({
+          elements: [],
+        });
       } catch {}
     }
-  }, []);
+  }, [excalidrawAPI]);
 
-  // Track cursor position for custom Laser pointer
+  // Track cursor position for glowing laser pointer
   useEffect(() => {
     if (!isOpen || !isLaserActive) {
-      setLaserPos(null);
       return;
     }
 
@@ -131,6 +196,7 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
+      setLaserPos(null);
     };
   }, [isOpen, isLaserActive]);
 
@@ -161,9 +227,14 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
         e.preventDefault();
         setIsLaserActive((prev) => {
           const next = !prev;
-          if (next && editorRef.current && !passThrough) {
+          const api = excalidrawApiRef.current;
+          if (api && !passThrough) {
             try {
-              editorRef.current.setCurrentTool('laser');
+              if (next) {
+                api.setActiveTool({ type: 'laser' });
+              } else {
+                api.setActiveTool({ type: 'freedraw' });
+              }
             } catch {}
           }
           return next;
@@ -190,10 +261,10 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose, handleClear, passThrough]);
 
-  // Ensure tldraw elements release focus when switching to pass-through
+  // Ensure Excalidraw elements release focus when switching to pass-through
   useEffect(() => {
     if (passThrough && typeof document !== 'undefined') {
-      if (document.activeElement && document.activeElement.closest('.presenter-tldraw-overlay')) {
+      if (document.activeElement && document.activeElement.closest('.presenter-excalidraw-overlay')) {
         (document.activeElement as HTMLElement).blur();
       }
     }
@@ -203,22 +274,41 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
 
   return (
     <div className={`fixed inset-0 z-50 overflow-hidden pointer-events-none ${passThrough ? '' : 'select-none'}`}>
-      {/* ─── Transparent Tldraw Canvas Container ─── */}
+      {/* ─── Transparent Excalidraw Canvas Container ─── */}
       <div
         className={`absolute inset-0 transition-opacity duration-200 ${
           isCanvasVisible ? 'opacity-100' : 'opacity-0'
         } ${
           passThrough
-            ? 'presenter-tldraw-overlay pass-through pointer-events-none'
-            : 'presenter-tldraw-overlay draw-mode pointer-events-auto'
+            ? 'presenter-excalidraw-overlay pass-through pointer-events-none'
+            : 'presenter-excalidraw-overlay draw-mode pointer-events-auto'
         }`}
         style={{ pointerEvents: passThrough ? 'none' : 'auto' }}
       >
-        <Tldraw
-          hideUi={!showFullUi}
-          components={components}
-          onMount={handleMount}
+        <Excalidraw
+          excalidrawAPI={handleExcalidrawAPI}
+          initialData={{
+            appState: {
+              viewBackgroundColor: 'transparent',
+              theme: 'dark',
+              currentItemStrokeColor: selectedColor,
+              currentItemStrokeWidth: 2,
+              currentItemOpacity: 100,
+            },
+          }}
+          theme="dark"
+          zenModeEnabled={!showFullUi}
+          gridModeEnabled={false}
           autoFocus={!passThrough}
+          handleKeyboardGlobally={false}
+          UIOptions={{
+            canvasActions: {
+              changeViewBackgroundColor: false,
+              clearCanvas: false,
+              saveToActiveFile: false,
+              toggleTheme: false,
+            },
+          }}
         />
       </div>
 
@@ -289,9 +379,14 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
             onClick={() => {
               setIsLaserActive((prev) => {
                 const next = !prev;
-                if (next && editorRef.current && !passThrough) {
+                const api = excalidrawApiRef.current;
+                if (api && !passThrough) {
                   try {
-                    editorRef.current.setCurrentTool('laser');
+                    if (next) {
+                      api.setActiveTool({ type: 'laser' });
+                    } else {
+                      api.setActiveTool({ type: 'freedraw' });
+                    }
                   } catch {}
                 }
                 return next;
@@ -317,14 +412,29 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
               type="button"
               onClick={() => {
                 setPassThrough(false);
-                selectTool('draw');
+                selectTool('selection');
               }}
               className={`p-1.5 rounded-lg text-xs transition-colors ${
-                !passThrough && activeTool === 'draw'
+                !passThrough && activeTool === 'selection'
                   ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
                   : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
               }`}
-              title="Pen / Pencil"
+              title="Select / Move"
+            >
+              <MousePointer className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPassThrough(false);
+                selectTool('freedraw');
+              }}
+              className={`p-1.5 rounded-lg text-xs transition-colors ${
+                !passThrough && activeTool === 'freedraw'
+                  ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
+                  : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Pen / Freehand Draw"
             >
               <Pencil className="w-3.5 h-3.5" />
             </button>
@@ -332,10 +442,10 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
               type="button"
               onClick={() => {
                 setPassThrough(false);
-                selectTool('highlight');
+                selectTool('highlighter');
               }}
               className={`p-1.5 rounded-lg text-xs transition-colors ${
-                !passThrough && activeTool === 'highlight'
+                !passThrough && activeTool === 'highlighter'
                   ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
                   : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
               }`}
@@ -362,16 +472,46 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
               type="button"
               onClick={() => {
                 setPassThrough(false);
-                selectTool('geo');
+                selectTool('line');
               }}
               className={`p-1.5 rounded-lg text-xs transition-colors ${
-                !passThrough && activeTool === 'geo'
+                !passThrough && activeTool === 'line'
                   ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
                   : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
               }`}
-              title="Rectangle / Shape"
+              title="Straight Line"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPassThrough(false);
+                selectTool('rectangle');
+              }}
+              className={`p-1.5 rounded-lg text-xs transition-colors ${
+                !passThrough && activeTool === 'rectangle'
+                  ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
+                  : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Rectangle"
             >
               <Square className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPassThrough(false);
+                selectTool('ellipse');
+              }}
+              className={`p-1.5 rounded-lg text-xs transition-colors ${
+                !passThrough && activeTool === 'ellipse'
+                  ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
+                  : 'hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Ellipse / Circle"
+            >
+              <Circle className="w-3.5 h-3.5" />
             </button>
             <button
               type="button"
@@ -409,11 +549,11 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
           <div className="hidden md:flex items-center gap-1 bg-zinc-900/80 px-1.5 py-1 rounded-xl border border-zinc-800">
             {HIGHLIGHT_COLORS.map((c) => (
               <button
-                key={c.value}
+                key={c.hex}
                 type="button"
-                onClick={() => selectColor(c.value)}
+                onClick={() => selectColor(c.hex)}
                 className={`w-3.5 h-3.5 rounded-full border transition-transform ${
-                  selectedColor === c.value
+                  selectedColor === c.hex
                     ? 'scale-125 border-white ring-1 ring-white/50'
                     : 'border-zinc-700/60 hover:scale-110'
                 }`}
@@ -425,7 +565,7 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
 
           <div className="h-4 w-px bg-zinc-800 shrink-0 mx-0.5" />
 
-          {/* 4. Full Tldraw UI Palette Toggle */}
+          {/* 4. Full Excalidraw UI Palette / Zen Mode Toggle */}
           <button
             type="button"
             onClick={() => setShowFullUi((prev) => !prev)}
@@ -434,7 +574,7 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
                 ? 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
                 : 'bg-zinc-900/80 border-zinc-800 text-zinc-400 hover:text-zinc-200'
             }`}
-            title="Toggle tldraw tool panel"
+            title="Toggle Excalidraw full tool panel"
           >
             <Palette className="w-3.5 h-3.5" />
           </button>
