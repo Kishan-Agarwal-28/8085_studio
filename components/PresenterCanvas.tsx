@@ -69,18 +69,6 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
   const handleExcalidrawAPI = useCallback((api: ExcalidrawImperativeAPI) => {
     excalidrawApiRef.current = api;
     setExcalidrawAPI(api);
-    try {
-      api.setActiveTool({ type: 'freedraw' });
-      api.updateScene({
-        appState: {
-          viewBackgroundColor: 'transparent',
-          theme: 'dark',
-          currentItemStrokeColor: '#eab308',
-          currentItemStrokeWidth: 2,
-          currentItemOpacity: 100,
-        },
-      });
-    } catch {}
   }, []);
 
   // Set tool in Excalidraw
@@ -289,6 +277,7 @@ export const PresenterCanvas: React.FC<PresenterCanvasProps> = ({
           excalidrawAPI={handleExcalidrawAPI}
           initialData={{
             appState: {
+              activeTool: { type: 'freedraw', customType: null, locked: false, lastActiveTool: null },
               viewBackgroundColor: 'transparent',
               theme: 'dark',
               currentItemStrokeColor: selectedColor,
